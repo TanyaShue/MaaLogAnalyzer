@@ -58,6 +58,7 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
     try {
       if (isSupportedArchive(file.name)) {
         pipeline.onFileLoadingStart?.()
+        let fileLoadingActive = true
         try {
           const result = await extractArchiveContents(files, selectPrimaryLogs)
           if (!result) {
@@ -67,6 +68,8 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
 
           const loadedTargets = createLoadedTargetsFromTextFiles(result.content, result.textFiles, result.primaryLogFiles)
           const defaultTargetId = pipeline.pickPreferredLogTargetId(loadedTargets)
+          pipeline.onFileLoadingEnd?.()
+          fileLoadingActive = false
           await processLogContent({
             content: result.content,
             parseInputs: result.primaryLogFiles.length > 0
@@ -79,7 +82,9 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
             loadedDefaultTargetId: defaultTargetId,
           })
         } finally {
-          pipeline.onFileLoadingEnd?.()
+          if (fileLoadingActive) {
+            pipeline.onFileLoadingEnd?.()
+          }
         }
         return
       }

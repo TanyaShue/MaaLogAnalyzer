@@ -5,7 +5,7 @@
  * 使用 fflate 的 filter 选项，只解压需要的文件，避免大 ZIP 全量解压导致内存暴涨。
  */
 
-import { unzip, type Unzipped } from 'fflate'
+import { unzip, unzipSync, type Unzipped } from 'fflate'
 import { decodeFileContent } from './textEncoding'
 import {
   createPrimaryLogSelectionOptions,
@@ -55,21 +55,36 @@ function findFile(
   return null
 }
 
-async function unzipNeededFiles(
-  file: File,
-  includeAuxiliaryFiles: boolean,
-): Promise<Unzipped> {
-  const buffer = await file.arrayBuffer()
-  const zipData = new Uint8Array(buffer)
+interface BufferedZipArchive {
+  data: Uint8Array
+  paths: string[]
+}
 
+async function bufferZipArchive(file: File): Promise<BufferedZipArchive> {
+  const data = new Uint8Array(await file.arrayBuffer())
+  const paths: string[] = []
+  unzipSync(data, {
+    filter: (entry) => {
+      paths.push(entry.name)
+      return false
+    },
+  })
+  return { data, paths }
+}
+
+async function unzipNeededFiles(
+  zipData: Uint8Array,
+  includeAuxiliaryFiles: boolean,
+  selectedPaths: Set<string>,
+): Promise<Unzipped> {
   return new Promise<Unzipped>((resolve, reject) => {
     unzip(
       zipData,
       {
         filter: (entry) => {
-          if (includeAuxiliaryFiles) return isNeededFile(entry.name)
           const fileName = entry.name.replace(/\\/g, '/').split('/').pop() ?? ''
-          return isPrimaryLogFileName(fileName)
+          if (isPrimaryLogFileName(fileName)) return selectedPaths.has(entry.name)
+          return includeAuxiliaryFiles && isNeededFile(entry.name)
         },
       },
       (err, unzipped) => {
@@ -97,18 +112,10 @@ export async function extractZipContents(
   primaryLogFiles: LoadedPrimaryLogFile[]
 } | null> {
   const includeAuxiliaryFiles = options.includeAuxiliaryFiles !== false
-  const files = Object.create(null) as Unzipped
-  for (const archiveFile of archiveFiles) {
-    const unzipped = await unzipNeededFiles(archiveFile, includeAuxiliaryFiles)
-    for (const [path, data] of Object.entries(unzipped)) {
-      files[path] = data
-    }
-  }
+  const archives = await Promise.all(archiveFiles.map(bufferZipArchive))
+  const archivePaths = Array.from(new Set(archives.flatMap(archive => archive.paths)))
 
-  const fileMap = toMap(files)
-  const paths = Object.keys(files)
-
-  const selectedLogs = selectPrimaryLogGroup(paths.map((path) => ({
+  const selectedLogs = selectPrimaryLogGroup(archivePaths.map((path) => ({
     path,
     name: path.replace(/\\/g, '/').split('/').pop() || path,
   })))
@@ -123,6 +130,17 @@ export async function extractZipContents(
     return null
   }
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
+
+  const files = Object.create(null) as Unzipped
+  for (const archive of archives) {
+    const unzipped = await unzipNeededFiles(archive.data, includeAuxiliaryFiles, selectedPaths)
+    for (const [path, data] of Object.entries(unzipped)) {
+      files[path] = data
+    }
+  }
+
+  const fileMap = toMap(files)
+  const paths = Object.keys(files)
 
   const basePath = selectedLogs[0].candidate.dirPath
   const loadedLogs = selectedLogs

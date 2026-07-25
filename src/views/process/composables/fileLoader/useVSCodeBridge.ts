@@ -6,10 +6,21 @@ import type { UseProcessFileLoaderOptions } from './types'
 interface VSCodeBridgePayload {
   type: string
   content?: string
+  archives?: Array<{ name: string, base64: string }>
+  selectedPaths?: string[]
   primaryLogFiles?: LoadedPrimaryLogFile[]
   errorImages?: Array<{ key: string, base64: string }>
   visionImages?: Array<{ key: string, base64: string }>
   waitFreezesImages?: Array<{ key: string, base64: string }>
+}
+
+const decodeBase64Archive = (entry: { name: string, base64: string }): File => {
+  const binary = atob(entry.base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new File([bytes], entry.name, { type: 'application/zip' })
 }
 
 export const useVSCodeBridge = (
@@ -34,6 +45,23 @@ export const useVSCodeBridge = (
 
   const handleVSCodeMessage = (event: MessageEvent) => {
     const message = event.data as VSCodeBridgePayload
+    if (message.type === 'loadArchive' && message.archives?.length) {
+      try {
+        const archives = message.archives.map(decodeBase64Archive)
+        const selectedPaths = new Set(message.selectedPaths ?? [])
+        options.onUploadFile(
+          archives.length === 1 ? archives[0] : archives,
+          selectedPaths.size > 0
+            ? async logOptions => logOptions.filter(option => selectedPaths.has(option.path))
+            : options.selectPrimaryLogs,
+        )
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        window.$message?.error(`无法读取 ZIP 文件: ${detail}`)
+      }
+      return
+    }
+
     if (message.type === 'loadFile' && (message.content || message.primaryLogFiles?.length)) {
       options.onFileLoadingStart()
       const errorImages = decodeBase64ImageEntries(message.errorImages, 'image/png')

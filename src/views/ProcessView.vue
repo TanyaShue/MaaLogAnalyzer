@@ -141,7 +141,11 @@ const {
   selectPrimaryLogs,
   emitters: {
     onSelectTask: (task) => emit('select-task', task),
-    onUploadFile: (file) => emit('upload-file', file, selectPrimaryLogs),
+    onUploadFile: (file, requestedSelectPrimaryLogs) => emit(
+      'upload-file',
+      file,
+      requestedSelectPrimaryLogs ?? selectPrimaryLogs,
+    ),
     onUploadContent: (content, errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles) => {
       emit('upload-content', content, errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles)
     },

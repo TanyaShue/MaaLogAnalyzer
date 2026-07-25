@@ -6,6 +6,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { extractZipContent, extractZipContents } from '../zipExtractor'
+import type { PrimaryLogSelectionOption } from '../logFileDiscovery'
 
 const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(bytes.byteLength)
@@ -73,6 +74,30 @@ describe('extractZipContent', () => {
     expect(result?.visionImages.size).toBe(0)
     expect(result?.waitFreezesImages.size).toBe(0)
     expect(createObjectUrl).not.toHaveBeenCalled()
+  })
+
+  it('extracts only the primary logs returned by the selection callback', async () => {
+    const zipData = zipSync({
+      'debug/maa.bak.2026.04.16-14.00.00.000.log': strToU8('[2026-04-16 14:00:00.000][INF] historical log\n'),
+      'debug/maa.log': strToU8('[2026-04-16 15:00:00.000][INF] current log\n'),
+    })
+    const selectCurrent = vi.fn(async (options: PrimaryLogSelectionOption[]) => (
+      options.filter(option => option.kind === 'main')
+    ))
+
+    const result = await extractZipContent(
+      new File([toArrayBuffer(zipData)], 'selected-primary.zip'),
+      selectCurrent,
+      { includeAuxiliaryFiles: false },
+    )
+
+    expect(selectCurrent).toHaveBeenCalledOnce()
+    expect(selectCurrent.mock.calls[0]?.[0]).toHaveLength(2)
+    expect(result?.primaryLogFiles).toEqual([{
+      path: 'debug/maa.log',
+      name: 'maa.log',
+      content: '[2026-04-16 15:00:00.000][INF] current log\n',
+    }])
   })
 
   it('merges independent MXU ZIP volumes before discovering logs and assets', async () => {

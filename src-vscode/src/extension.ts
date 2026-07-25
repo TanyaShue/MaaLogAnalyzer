@@ -25,6 +25,63 @@ interface PrimaryLogCandidate {
   rotatedTimestampHint: string | null
 }
 
+interface PrimaryLogSelectionEntry {
+  path: string
+  name: string
+  kind: PrimaryLogKind
+  rotatedTimestampHint: string | null
+  size: number
+}
+
+interface PrimaryLogQuickPickItem extends vscode.QuickPickItem {
+  logPath: string
+}
+
+const formatLogSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * 多个主日志候选时先让用户选择，避免把数百 MB 的历史日志一次性送进 webview。
+ * 默认只选择当前日志；没有当前日志时，选择最新的备份日志。
+ */
+async function pickPrimaryLogSelection(
+  entries: PrimaryLogSelectionEntry[],
+): Promise<Set<string> | null> {
+  if (entries.length <= 1) {
+    return new Set(entries.map(entry => entry.path))
+  }
+
+  const sorted = [...entries].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'main' ? -1 : 1
+    return (b.rotatedTimestampHint ?? '').localeCompare(a.rotatedTimestampHint ?? '')
+  })
+
+  const mainEntries = sorted.filter(entry => entry.kind === 'main')
+  const defaultEntries = mainEntries.length > 0 ? mainEntries : sorted.slice(0, 1)
+  const defaultPicked = new Set(defaultEntries.map(entry => entry.path))
+
+  const items: PrimaryLogQuickPickItem[] = sorted.map(entry => ({
+    label: entry.name,
+    description: entry.kind === 'main' ? '当前日志' : '备份日志',
+    detail: `${formatLogSize(entry.size)}${entry.rotatedTimestampHint ? ` · ${entry.rotatedTimestampHint}` : ''}`,
+    picked: defaultPicked.has(entry.path),
+    logPath: entry.path,
+  }))
+
+  const picked = await vscode.window.showQuickPick(items, {
+    canPickMany: true,
+    title: `选择要加载的日志（默认 ${defaultPicked.size}/${entries.length}）`,
+    placeHolder: '勾选需要分析的日志；历史 bak 日志可按需加载',
+    ignoreFocusOut: true,
+  })
+
+  if (!picked || picked.length === 0) return null
+  return new Set(picked.map(item => item.logPath))
+}
+
 const normalizeTimestampMilliseconds = (value: string): string => {
   const lastDot = value.lastIndexOf('.')
   if (lastDot < 0) return value
@@ -494,7 +551,21 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
       return
     }
 
-    const loadedSegments = await Promise.all(selectedLogs.map(async ({ item }) => {
+    const selectionEntries = await Promise.all(selectedLogs.map(async ({ item, candidate }) => {
+      const stat = await vscode.workspace.fs.stat(item.uri)
+      return {
+        path: item.path,
+        name: item.name,
+        kind: candidate.kind,
+        rotatedTimestampHint: candidate.rotatedTimestampHint,
+        size: stat.size,
+      } satisfies PrimaryLogSelectionEntry
+    }))
+    const selectedPaths = await pickPrimaryLogSelection(selectionEntries)
+    if (!selectedPaths) return
+
+    const selectedLogEntries = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+    const loadedSegments = await Promise.all(selectedLogEntries.map(async ({ item }) => {
       const bytes = await vscode.workspace.fs.readFile(item.uri)
       return {
         path: item.path,
@@ -577,11 +648,21 @@ async function collectDebugAssetsForBaseDirectory(baseDirUri: vscode.Uri): Promi
   waitFreezesImages: Array<{ key: string; base64: string }>
 }> {
   const baseName = path.posix.basename(baseDirUri.path).toLowerCase()
-  const debugDirUri = baseName === 'debug'
-    ? baseDirUri
-    : vscode.Uri.joinPath(baseDirUri, 'debug')
+  const candidateDirs = baseName === 'debug'
+    ? [baseDirUri]
+    : [baseDirUri, vscode.Uri.joinPath(baseDirUri, 'debug')]
+  let debugDirUri: vscode.Uri | undefined
 
-  if (!(await pathExists(debugDirUri))) {
+  for (const candidate of candidateDirs) {
+    const hasOnError = await pathExists(vscode.Uri.joinPath(candidate, 'on_error'))
+    const hasVision = await pathExists(vscode.Uri.joinPath(candidate, 'vision'))
+    if (hasOnError || hasVision) {
+      debugDirUri = candidate
+      break
+    }
+  }
+
+  if (!debugDirUri) {
     return { errorImages: [], visionImages: [], waitFreezesImages: [] }
   }
 
@@ -708,21 +789,6 @@ async function uninstallWindowsContextMenu(): Promise<void> {
     vscode.window.showErrorMessage(`卸载右键菜单失败: ${error}`)
   }
 }
-/** 判断某个路径是否是需要解压的文件 */
-function isNeededFile(filePath: string): boolean {
-  const lower = filePath.replace(/\\/g, '/').toLowerCase()
-  const name = lower.substring(lower.lastIndexOf('/') + 1)
-  if (getPrimaryLogCandidate(lower, name)) return true
-  if (lower.includes('/on_error/') && lower.endsWith('.png')) return true
-  if (lower.includes('/vision/') && lower.endsWith('.jpg')) return true
-  return false
-}
-
-/** 拼接路径 */
-function joinZipPath(base: string, name: string): string {
-  return base ? `${base}/${name}` : name
-}
-
 /** 解析 on_error 截图文件名为标准化 key */
 function parseErrorImageKey(fileName: string): string | null {
   const match = fileName.match(
@@ -810,22 +876,26 @@ async function findFirstMxuZipVolumeUri(directory: vscode.Uri): Promise<vscode.U
   return first ? vscode.Uri.joinPath(directory, first.name) : null
 }
 
-/** 处理 ZIP 文件：Node.js 侧解压 */
+/** 将 ZIP 压缩数据交给 Webview，复用 Web 端归档加载与进度流程。 */
 async function handleZipFile(uri: vscode.Uri): Promise<void> {
   try {
     const volumeUris = await collectMxuZipVolumeUris(uri)
-    const files: Record<string, Uint8Array> = Object.create(null)
-    for (const volumeUri of volumeUris) {
-      const fileContent = await vscode.workspace.fs.readFile(volumeUri)
-      const zipData = new Uint8Array(fileContent)
-      const unzipped = unzipSync(zipData, {
-        filter: (file) => isNeededFile(file.name),
+    const entrySizes = new Map<string, number>()
+    const archives = await Promise.all(volumeUris.map(async (volumeUri) => {
+      const bytes = await vscode.workspace.fs.readFile(volumeUri)
+      unzipSync(new Uint8Array(bytes), {
+        filter: (entry) => {
+          entrySizes.set(entry.name, entry.originalSize)
+          return false
+        },
       })
-      Object.assign(files, unzipped)
-    }
+      return {
+        name: path.posix.basename(volumeUri.path),
+        base64: Buffer.from(bytes).toString('base64'),
+      }
+    }))
 
-    const paths = Object.keys(files)
-    const selectedLogs = selectPrimaryLogGroup(paths.map(filePath => ({
+    const selectedLogs = selectPrimaryLogGroup(Array.from(entrySizes.keys()).map(filePath => ({
       path: filePath,
       name: filePath.replace(/\\/g, '/').split('/').pop() || filePath,
     })))
@@ -833,80 +903,24 @@ async function handleZipFile(uri: vscode.Uri): Promise<void> {
       vscode.window.showWarningMessage(`ZIP 文件中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
       return
     }
-    const basePath = selectedLogs[0].candidate.dirPath
 
-    const loadedSegments = selectedLogs
-      .map(({ item }) => {
-        const contentBytes = files[item.path]
-        if (!contentBytes) return null
-        return {
-          path: item.path,
-          name: item.name,
-          content: new TextDecoder('utf-8').decode(contentBytes),
-        }
-      })
-      .filter((entry): entry is { path: string; name: string; content: string } => entry != null)
-    const primaryLogFiles = sortLoadedPrimaryLogSegments(loadedSegments)
-
-    if (primaryLogFiles.length === 0) {
-      vscode.window.showWarningMessage('ZIP 文件中未找到有效的日志内容')
-      return
-    }
-
-    // 提取 on_error 截图转为 base64
-    const errorImages: { key: string; base64: string }[] = []
-    const onErrorPrefix = joinZipPath(basePath, 'on_error/').toLowerCase()
-
-    // 提取 vision 调试截图转为 base64
-    const visionImages: { key: string; base64: string }[] = []
-    const visionPrefix = joinZipPath(basePath, 'vision/').toLowerCase()
-
-    // 提取 wait_freezes 调试截图转为 base64
-    const waitFreezesImages: { key: string; base64: string }[] = []
-
-    for (const p of paths) {
-      const normalized = p.replace(/\\/g, '/')
-      const lower = normalized.toLowerCase()
-      if (lower.startsWith(onErrorPrefix) && lower.endsWith('.png')) {
-        const fileName = normalized.substring(normalized.lastIndexOf('/') + 1)
-        const key = parseErrorImageKey(fileName)
-        if (key) {
-          const base64 = Buffer.from(files[p]).toString('base64')
-          errorImages.push({ key, base64 })
-        }
-      } else if (lower.startsWith(visionPrefix) && lower.endsWith('.jpg')) {
-        const fileName = normalized.substring(normalized.lastIndexOf('/') + 1)
-        const wfKey = parseWaitFreezesKey(fileName)
-        if (wfKey) {
-          const base64 = Buffer.from(files[p]).toString('base64')
-          waitFreezesImages.push({ key: wfKey, base64 })
-        } else {
-          const key = parseVisionImageKey(fileName)
-          if (key) {
-            const base64 = Buffer.from(files[p]).toString('base64')
-            // 同一 key 覆盖（取最后出现的）
-            const existing = visionImages.findIndex(v => v.key === key)
-            if (existing >= 0) {
-              visionImages[existing].base64 = base64
-            } else {
-              visionImages.push({ key, base64 })
-            }
-          }
-        }
-      }
-    }
+    const selectionEntries: PrimaryLogSelectionEntry[] = selectedLogs.map(({ item, candidate }) => ({
+      path: item.path,
+      name: item.name,
+      kind: candidate.kind,
+      rotatedTimestampHint: candidate.rotatedTimestampHint,
+      size: entrySizes.get(item.path) ?? 0,
+    }))
+    const selectedPaths = await pickPrimaryLogSelection(selectionEntries)
+    if (!selectedPaths) return
 
     currentPanel?.webview.postMessage({
-      type: 'loadFile',
-      content: '',
-      primaryLogFiles,
-      fileName: path.posix.basename(uri.path),
-      errorImages,
-      visionImages,
-      waitFreezesImages,
+      type: 'loadArchive',
+      archives,
+      selectedPaths: Array.from(selectedPaths),
     })
   } catch (error) {
-    vscode.window.showErrorMessage(`解压 ZIP 文件失败: ${error}`)
+    vscode.window.showErrorMessage(`读取 ZIP 文件失败: ${error}`)
   }
 }
 function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -921,7 +935,7 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} https://cloud.umami.is 'nonce-${nonce}'; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource}; connect-src https://cloud.umami.is;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} https://cloud.umami.is 'nonce-${nonce}'; worker-src blob:; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource}; connect-src https://cloud.umami.is https://gateway.umami.is;">
   <title>MAA 日志分析器</title>
   <link rel="stylesheet" href="${webviewUri}/assets/index.css">
   <style>
