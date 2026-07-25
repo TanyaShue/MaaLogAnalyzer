@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import {
   NCard, NDescriptions, NDescriptionsItem, NFlex, NTag,
-  NCollapse, NText,
+  NCollapse, NText, NButton,
 } from 'naive-ui'
 import type { UnifiedFlowItem } from '../../../types'
 import { getRuntimeStatusTagType, getRuntimeStatusText } from '../../../utils/runtimeStatus'
@@ -22,6 +22,8 @@ const props = defineProps<{
   resolveImageSrc: (source: string) => string
   formatJson: (obj: any) => string
   copyToClipboard: (text: string) => void
+  showOpenCropButton: boolean
+  openErrorImageInCrop: () => void | Promise<void>
 }>()
 
 const expandedNames = ref<string[]>([...props.rawJsonDefaultExpanded])
@@ -100,7 +102,16 @@ watch(
     </n-descriptions>
 
     <div v-if="props.selectedFlowErrorImage" style="margin-top: 12px">
-      <n-text depth="3" style="font-size: 13px; display: block; margin-bottom: 8px">错误截图</n-text>
+      <n-flex align="center" justify="space-between" style="margin-bottom: 8px">
+        <n-text depth="3" style="font-size: 13px">错误截图</n-text>
+        <n-button
+          v-if="props.showOpenCropButton"
+          size="tiny"
+          @click.stop="props.openErrorImageInCrop"
+        >
+          打开截图工具
+        </n-button>
+      </n-flex>
       <safe-preview-image :src="props.resolveImageSrc(props.selectedFlowErrorImage)" class="detail-preview-image" />
     </div>
 

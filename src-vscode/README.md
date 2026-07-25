@@ -19,6 +19,7 @@ Maa 日志分析器是一个用于分析 MaaFramework 日志的 VS Code 扩展�
   - 侧边栏入口（活动栏 `MAA`）
   - 资源管理器右键菜单（日志文件、文件夹）
   - 编辑器右键菜单（`.log` 文件）
+  - 安装 Maa Pipeline Support 后，可将日志识别图片和识别结果发送到其截图工具
 - Windows 文件管理器右键菜单（可选安装）：
   - 支持 `.log`、`.zip`、文件夹、文件夹空白处
 - ZIP 调试资源支持：
@@ -39,6 +40,7 @@ This extension currently provides the following capabilities for MaaFramework lo
   - Sidebar entry (Activity Bar `MAA`)
   - Explorer context menu (log files and folders)
   - Editor context menu (`.log` files)
+  - Send log recognition images and results to the Maa Pipeline Support crop tool when installed
 - Optional Windows Explorer context menu installation:
   - Supports `.log`, `.zip`, folders, and folder background
 - ZIP debug assets support:

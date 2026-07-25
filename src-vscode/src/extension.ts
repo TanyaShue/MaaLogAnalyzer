@@ -426,6 +426,35 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
             await vscode.env.clipboard.writeText(message.text)
           }
           break
+
+        case 'openMseCrop': {
+          if (typeof message.image !== 'string' || !message.image.startsWith('data:image/')) {
+            vscode.window.showErrorMessage('无法打开 MSE 截图工具: 图片数据无效')
+            break
+          }
+
+          const mseExtension = vscode.extensions.getExtension('nekosu.maa-support')
+          if (!mseExtension) {
+            vscode.window.showWarningMessage('未安装或未启用 Maa Pipeline Support 插件')
+            break
+          }
+
+          try {
+            await mseExtension.activate()
+            const result = await vscode.commands.executeCommand<{ imageAccepted?: boolean }>('maa.open-crop', {
+              image: message.image,
+              detail: typeof message.detail === 'object' && message.detail !== null
+                ? message.detail
+                : undefined,
+            })
+            if (result?.imageAccepted !== true) {
+              vscode.window.showWarningMessage('当前 Maa Pipeline Support 版本不支持接收图片，请更新后重试')
+            }
+          } catch (error) {
+            vscode.window.showErrorMessage(`无法打开 MSE 截图工具: ${error}`)
+          }
+          break
+        }
       }
     },
     undefined,

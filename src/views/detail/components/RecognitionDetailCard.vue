@@ -24,6 +24,8 @@ const props = defineProps<{
   bridgeRecognitionLoading?: boolean
   bridgeRecognitionError?: string | null
   bridgeRecognitionDrawImages: string[]
+  showOpenCropButton: boolean
+  openCropImageAvailable: boolean
   rawJsonDefaultExpanded: string[]
   resolveImageSrc: (source: string) => string
   formatJson: (obj: any) => string
@@ -50,10 +52,10 @@ const getRecognitionHitTagType = (value: unknown) => value === '命中' ? 'succe
       🔍 识别详情
     </template>
     <template #header-extra>
-      <n-flex v-if="props.isVscodeLaunchEmbed" align="center" style="gap: 6px">
+      <n-flex v-if="props.showOpenCropButton" align="center" style="gap: 6px">
         <n-button
           size="tiny"
-          :disabled="!props.bridgeRecognitionRawImage && !(props.bridgeRecognitionImageRefs && props.bridgeRecognitionImageRefs.raw)"
+          :disabled="!props.openCropImageAvailable"
           @click.stop="props.openRecognitionInCrop"
         >
           打开截图工具

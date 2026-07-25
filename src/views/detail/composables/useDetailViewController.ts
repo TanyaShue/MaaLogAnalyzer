@@ -119,7 +119,10 @@ export const useDetailViewController = (
     isVscodeLaunchEmbed,
     bridgeRecognitionRawImage,
     bridgeRecognitionDrawImages,
+    showOpenCropButton,
+    openCropImageAvailable,
     openRecognitionInCrop,
+    openImageInCrop,
   } = useDetailBridgeRecognition({
     isVscodeLaunchEmbed: computed(() => props.isVscodeLaunchEmbed),
     bridgeOpenCrop: computed(() => props.bridgeOpenCrop),
@@ -154,6 +157,19 @@ export const useDetailViewController = (
     if (currentActionItem.value.error_image) return currentActionItem.value.error_image
     return props.selectedNode?.error_image ?? null
   })
+
+  const openSelectedFlowErrorInCrop = () => openImageInCrop(
+    selectedFlowErrorImage.value,
+    selectedFlowItem.value,
+  )
+  const openCurrentActionErrorInCrop = () => openImageInCrop(
+    currentActionErrorImage.value,
+    currentActionItem.value ?? currentActionDetails.value,
+  )
+  const openSelectedNodeErrorInCrop = () => openImageInCrop(
+    selectedNodeDisplayErrorImage.value,
+    props.selectedNode,
+  )
 
   const currentFocusCard = computed(() => {
     if (currentRecognitionItem.value) {
@@ -201,7 +217,12 @@ export const useDetailViewController = (
     isVscodeLaunchEmbed,
     bridgeRecognitionRawImage,
     bridgeRecognitionDrawImages,
+    showOpenCropButton,
+    openCropImageAvailable,
     openRecognitionInCrop,
+    openSelectedFlowErrorInCrop,
+    openCurrentActionErrorInCrop,
+    openSelectedNodeErrorInCrop,
     formattedBridgeNodeDefinition,
     selectedNodeDisplayErrorImage,
     currentActionErrorImage,

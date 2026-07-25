@@ -61,7 +61,12 @@ const {
   isVscodeLaunchEmbed,
   bridgeRecognitionRawImage,
   bridgeRecognitionDrawImages,
+  showOpenCropButton,
+  openCropImageAvailable,
   openRecognitionInCrop,
+  openSelectedFlowErrorInCrop,
+  openCurrentActionErrorInCrop,
+  openSelectedNodeErrorInCrop,
   formattedBridgeNodeDefinition,
   selectedNodeDisplayErrorImage,
   currentActionErrorImage,
@@ -113,6 +118,8 @@ watch(
           :bridge-recognition-loading="bridgeRecognitionLoading"
           :bridge-recognition-error="bridgeRecognitionError"
           :bridge-recognition-draw-images="bridgeRecognitionDrawImages"
+          :show-open-crop-button="showOpenCropButton"
+          :open-crop-image-available="openCropImageAvailable"
           :raw-json-default-expanded="rawJsonDefaultExpanded"
           :resolve-image-src="resolveImageSrc"
           :format-json="formatJson"
@@ -133,6 +140,8 @@ watch(
           :resolve-image-src="resolveImageSrc"
           :format-json="formatJson"
           :copy-to-clipboard="copyToClipboard"
+          :show-open-crop-button="showOpenCropButton"
+          :open-error-image-in-crop="openCurrentActionErrorInCrop"
         />
 
         <flow-fallback-card
@@ -150,6 +159,8 @@ watch(
           :resolve-image-src="resolveImageSrc"
           :format-json="formatJson"
           :copy-to-clipboard="copyToClipboard"
+          :show-open-crop-button="showOpenCropButton"
+          :open-error-image-in-crop="openSelectedFlowErrorInCrop"
         />
 
         <node-detail-card
@@ -171,6 +182,8 @@ watch(
           :resolve-image-src="resolveImageSrc"
           :format-json="formatJson"
           :copy-to-clipboard="copyToClipboard"
+          :show-open-crop-button="showOpenCropButton"
+          :open-error-image-in-crop="openSelectedNodeErrorInCrop"
         />
 
         </template>
