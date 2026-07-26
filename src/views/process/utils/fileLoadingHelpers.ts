@@ -231,28 +231,3 @@ export const readDirectoryFiles = async (
 
   return files
 }
-
-interface Base64ImageEntry {
-  key: string
-  base64: string
-}
-
-export const decodeBase64ImageEntries = (
-  entries: Base64ImageEntry[] | undefined,
-  mimeType: string,
-): Map<string, string> => {
-  const images = new Map<string, string>()
-  if (!entries || !Array.isArray(entries)) return images
-
-  for (const { key, base64 } of entries) {
-    const binaryStr = atob(base64)
-    const bytes = new Uint8Array(binaryStr.length)
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i)
-    }
-    const blob = new Blob([bytes], { type: mimeType })
-    replaceBlobUrl(images, key, blob)
-  }
-
-  return images
-}

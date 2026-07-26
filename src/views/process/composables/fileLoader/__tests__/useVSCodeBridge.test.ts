@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { handleVSCodeLoadFilePayload } from '../useVSCodeBridge'
 
 describe('VS Code loadFile bridge', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('forwards archive search text alongside selected primary logs', () => {
     const onUploadContent = vi.fn()
     const onFileLoadingStart = vi.fn()
@@ -25,5 +29,46 @@ describe('VS Code loadFile bridge', () => {
       textFiles,
       primaryLogFiles,
     )
+  })
+
+  it('ends loading and revokes decoded images when a later field is invalid', () => {
+    const onUploadContent = vi.fn()
+    const onFileLoadingStart = vi.fn()
+    const onFileLoadingEnd = vi.fn()
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:error-image')
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    expect(() => handleVSCodeLoadFilePayload(
+      {
+        type: 'loadFile',
+        content: 'log',
+        errorImages: [{ key: 'error', base64: btoa('image') }],
+        visionImages: [{ key: 'vision', base64: 'not-base64' }],
+      },
+      { onUploadContent, onFileLoadingStart, onFileLoadingEnd },
+    )).toThrow()
+
+    expect(onUploadContent).not.toHaveBeenCalled()
+    expect(onFileLoadingStart).toHaveBeenCalledOnce()
+    expect(onFileLoadingEnd).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:error-image')
+  })
+
+  it('rejects malformed loaded-file entries without leaving loading active', () => {
+    const onUploadContent = vi.fn()
+    const onFileLoadingStart = vi.fn()
+    const onFileLoadingEnd = vi.fn()
+
+    expect(() => handleVSCodeLoadFilePayload(
+      {
+        type: 'loadFile',
+        content: 'log',
+        primaryLogFiles: [{ path: 'maa.log', name: 'maa.log', content: 42 }],
+      },
+      { onUploadContent, onFileLoadingStart, onFileLoadingEnd },
+    )).toThrow(/primaryLogFiles/)
+
+    expect(onUploadContent).not.toHaveBeenCalled()
+    expect(onFileLoadingEnd).toHaveBeenCalledOnce()
   })
 })
