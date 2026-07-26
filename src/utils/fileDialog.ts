@@ -8,6 +8,7 @@ import { toastError, toastWarning } from './toast'
 import { decodeFileContent } from './textEncoding'
 import { invoke } from '@tauri-apps/api/core'
 import { joinNativePath } from './nativePath'
+import { replaceBlobUrl } from './blobUrlMap'
 import {
   combineLoadedPrimaryLogSegments,
   createPrimaryLogSelectionOptions,
@@ -628,8 +629,7 @@ async function readErrorImagesWeb(debugHandle: FileSystemDirectoryHandle): Promi
           const paddedMs = ms.padEnd(3, '0')
           const key = `${timestamp}.${paddedMs}_${nodeName}`
           const file = await (entry as FileSystemFileHandle).getFile()
-          const url = URL.createObjectURL(file)
-          imageMap.set(key, url)
+          replaceBlobUrl(imageMap, key, file)
         }
       }
     }
@@ -652,11 +652,7 @@ async function readVisionImagesWeb(debugHandle: FileSystemDirectoryHandle): Prom
         const key = parseVisionImageKey(entry.name)
         if (key != null) {
           const file = await (entry as FileSystemFileHandle).getFile()
-          const url = URL.createObjectURL(file)
-          // 同一 key 覆盖（释放前一个 blob URL）
-          const prev = imageMap.get(key)
-          if (prev) URL.revokeObjectURL(prev)
-          imageMap.set(key, url)
+          replaceBlobUrl(imageMap, key, file)
         }
       }
     }
@@ -741,8 +737,7 @@ async function readWaitFreezesImagesWeb(debugHandle: FileSystemDirectoryHandle):
         const key = parseWaitFreezesKey(entry.name)
         if (key != null) {
           const file = await (entry as FileSystemFileHandle).getFile()
-          const url = URL.createObjectURL(file)
-          imageMap.set(key, url)
+          replaceBlobUrl(imageMap, key, file)
         }
       }
     }

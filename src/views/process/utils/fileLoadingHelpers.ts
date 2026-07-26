@@ -1,3 +1,5 @@
+import { replaceBlobUrl } from '../../../utils/blobUrlMap'
+
 export { isBakLogFileName, isMainLogFileName } from '../../../utils/logFileDiscovery'
 
 const TEXT_SEARCH_EXTENSIONS = ['.log', '.txt', '.jsonl'] as const
@@ -82,24 +84,20 @@ export const collectDebugAssetsFromFiles = async (files: Iterable<File>): Promis
 
     if ((lower.includes('/on_error/') || lower.startsWith('on_error/')) && lower.endsWith('.png')) {
       const key = parseErrorImageKey(file.name)
-      if (key) errorImages.set(key, URL.createObjectURL(file))
+      if (key) replaceBlobUrl(errorImages, key, file)
       continue
     }
 
     if ((lower.includes('/vision/') || lower.startsWith('vision/')) && lower.endsWith('.jpg')) {
       const waitFreezesKey = parseWaitFreezesKey(file.name)
       if (waitFreezesKey) {
-        const previous = waitFreezesImages.get(waitFreezesKey)
-        if (previous) URL.revokeObjectURL(previous)
-        waitFreezesImages.set(waitFreezesKey, URL.createObjectURL(file))
+        replaceBlobUrl(waitFreezesImages, waitFreezesKey, file)
         continue
       }
 
       const visionKey = parseVisionImageKey(file.name)
       if (visionKey) {
-        const previous = visionImages.get(visionKey)
-        if (previous) URL.revokeObjectURL(previous)
-        visionImages.set(visionKey, URL.createObjectURL(file))
+        replaceBlobUrl(visionImages, visionKey, file)
       }
     }
   }
@@ -194,7 +192,7 @@ export const decodeBase64ImageEntries = (
       bytes[i] = binaryStr.charCodeAt(i)
     }
     const blob = new Blob([bytes], { type: mimeType })
-    images.set(key, URL.createObjectURL(blob))
+    replaceBlobUrl(images, key, blob)
   }
 
   return images

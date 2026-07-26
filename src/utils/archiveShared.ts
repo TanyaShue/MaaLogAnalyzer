@@ -1,4 +1,5 @@
 import { isPrimaryLogFileName } from './logFileDiscovery'
+import { replaceBlobUrl } from './blobUrlMap'
 
 export interface ExtractedTextFile {
   path: string
@@ -78,10 +79,11 @@ export function extractErrorImages(
         const key = `${timestamp}.${paddedMs}_${nodeName}`
         const data = files.get(p)
         if (data) {
-          const url = URL.createObjectURL(
+          replaceBlobUrl(
+            imageMap,
+            key,
             new Blob([toBlobArrayBuffer(data)], { type: 'image/png' }),
           )
-          imageMap.set(key, url)
         }
       }
     }
@@ -107,12 +109,11 @@ export function extractVisionImages(
       if (key != null) {
         const data = files.get(p)
         if (data) {
-          const url = URL.createObjectURL(
+          replaceBlobUrl(
+            imageMap,
+            key,
             new Blob([toBlobArrayBuffer(data)], { type: 'image/jpeg' }),
           )
-          const prev = imageMap.get(key)
-          if (prev) URL.revokeObjectURL(prev)
-          imageMap.set(key, url)
         }
       }
     }
@@ -138,10 +139,11 @@ export function extractWaitFreezesImages(
       if (key != null) {
         const data = files.get(p)
         if (data) {
-          const url = URL.createObjectURL(
+          replaceBlobUrl(
+            imageMap,
+            key,
             new Blob([toBlobArrayBuffer(data)], { type: 'image/jpeg' }),
           )
-          imageMap.set(key, url)
         }
       }
     }

@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { toastWarning } from '../../../utils/toast'
 import { isTauri } from '../../../utils/platform'
 import { decodeFileContent } from '../../../utils/textEncoding'
+import { replaceBlobUrl } from '../../../utils/blobUrlMap'
 import {
   collectTextFilesFromFiles,
   type LoadedTextFile,
@@ -205,13 +206,12 @@ export const useFlowchartUpload = ({
       const name = file.name.toLowerCase()
       if (name.endsWith('.png') || name.endsWith('.jpg')) {
         const baseName = file.name.replace(/\.(png|jpg)$/i, '')
-        const url = URL.createObjectURL(file)
         if (baseName.endsWith('_wait_freezes')) {
-          waitFreezesImages.set(baseName, url)
+          replaceBlobUrl(waitFreezesImages, baseName, file)
         } else if (baseName.includes('_vision_')) {
-          visionImages.set(baseName, url)
+          replaceBlobUrl(visionImages, baseName, file)
         } else {
-          errorImages.set(baseName, url)
+          replaceBlobUrl(errorImages, baseName, file)
         }
       }
     }
