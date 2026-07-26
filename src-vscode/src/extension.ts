@@ -442,7 +442,8 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
   currentPanel.webview.onDidReceiveMessage(
     async (message: any) => {
       switch (message.type) {
-        case 'openFile':
+        case 'openFile': {
+          const fileOperation = loadOperationCoordinator.begin()
           // 打开文件选择对话框
           const fileUri = await vscode.window.showOpenDialog({
             canSelectMany: false,
@@ -453,11 +454,13 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
           })
 
           if (fileUri && fileUri[0]) {
-            await analyzeFileUri(fileUri[0])
+            await analyzeFileUri(fileUri[0], fileOperation)
           }
           break
+        }
 
-        case 'openFolder':
+        case 'openFolder': {
+          const folderOperation = loadOperationCoordinator.begin()
           const folderUri = await vscode.window.showOpenDialog({
             canSelectMany: false,
             canSelectFolders: true,
@@ -466,9 +469,10 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
           })
 
           if (folderUri && folderUri[0]) {
-            await analyzeFolderUri(folderUri[0])
+            await analyzeFolderUri(folderUri[0], folderOperation)
           }
           break
+        }
 
         case 'showError':
           vscode.window.showErrorMessage(message.message)

@@ -13,4 +13,22 @@ describe('VS Code Webview security policy', () => {
     expect(extensionSource).not.toMatch(/<script[^>]+src=["']https?:\/\//i)
     expect(extensionSource).toContain('connect-src ${webview.cspSource} data: blob:;')
   })
+
+  it('starts load generations before asynchronous picker dialogs resolve', () => {
+    const filePicker = extensionSource.slice(
+      extensionSource.indexOf("case 'openFile':"),
+      extensionSource.indexOf("case 'openFolder':"),
+    )
+    const folderPicker = extensionSource.slice(
+      extensionSource.indexOf("case 'openFolder':"),
+      extensionSource.indexOf("case 'showError':"),
+    )
+
+    expect(filePicker.indexOf('loadOperationCoordinator.begin()'))
+      .toBeLessThan(filePicker.indexOf('showOpenDialog'))
+    expect(filePicker).toContain('analyzeFileUri(fileUri[0], fileOperation)')
+    expect(folderPicker.indexOf('loadOperationCoordinator.begin()'))
+      .toBeLessThan(folderPicker.indexOf('showOpenDialog'))
+    expect(folderPicker).toContain('analyzeFolderUri(folderUri[0], folderOperation)')
+  })
 })
