@@ -15,7 +15,9 @@ const output = (
     parserVersion: 'test-parser/1.0.0',
     generatedAt: '2026-07-19T00:00:00Z',
   },
-  tasks: Array.from({ length: taskCount }, () => ({}) as KernelOutput['tasks'][number]),
+  tasks: Array.from({ length: taskCount }, (_, index) => ({
+    uuid: `task-${index + 1}`,
+  }) as KernelOutput['tasks'][number]),
   events: Array.from({ length: eventCount }, () => ({}) as KernelOutput['events'][number]),
   stats: {
     nodes: [],
