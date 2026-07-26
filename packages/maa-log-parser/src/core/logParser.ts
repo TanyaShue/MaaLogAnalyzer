@@ -382,6 +382,11 @@ export class LogParser {
     onProgress?: (progress: ParseProgress) => void,
     options?: ParseFileOptions,
   ): Promise<void> {
+    const chunkLineCount = options?.chunkLineCount ?? 1000
+    if (!Number.isSafeInteger(chunkLineCount) || chunkLineCount <= 0) {
+      throw new RangeError('chunkLineCount must be a positive safe integer')
+    }
+
     this.resetParsedEvents()
 
     const normalizedInputs = inputs.map((input, index) => ({
@@ -389,7 +394,6 @@ export class LogParser {
       inputIndex: input.inputIndex ?? index,
     }))
     const totalChars = normalizedInputs.reduce((sum, input) => sum + input.content.length, 0)
-    const chunkLineCount = options?.chunkLineCount ?? 1000
     const yieldControl = options?.yieldControl === undefined
       ? defaultParseYieldControl
       : options.yieldControl
