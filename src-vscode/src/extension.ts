@@ -4,6 +4,11 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { copyFile, mkdir } from 'fs/promises'
 import { unzipSync } from 'fflate'
+import {
+  gateExternalAnalysisUri,
+  type ExternalAnalysisRequest,
+  type ExternalPathKind,
+} from './externalUriGate'
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined
 const execFileAsync = promisify(execFile)
@@ -287,57 +292,41 @@ export function activate(context: vscode.ExtensionContext) {
 
   const uriHandler = vscode.window.registerUriHandler({
     handleUri: async (uri: vscode.Uri) => {
-      let targetPath: string | null = null
-      let targetRoute: 'analyze-file' | 'analyze-folder' | null = null
-
-      // New format: vscode://publisher.extension/open/<route>/<base64Path>
-      const parts = uri.path.replace(/^\/+/, '').split('/')
-      if (parts[0] === 'open' && parts.length >= 3) {
-        if (parts[1] === 'analyze-file' || parts[1] === 'analyze-folder') {
-          targetRoute = parts[1]
-        }
-        const encoded = parts.slice(2).join('/')
-        try {
-          targetPath = Buffer.from(encoded, 'base64').toString('utf8')
-        } catch {
-          targetPath = null
-        }
-      }
-
-      // Backward compatibility: ?path=...
-      if (!targetPath) {
-        const qs = new URLSearchParams(uri.query)
-        targetPath = qs.get('path')
-        const route = qs.get('route')
-        if (route === 'analyze-file' || route === 'analyze-folder') {
-          targetRoute = route
-        }
-      }
-
-      // Ignore unrelated URI opens silently.
-      if (!targetPath) return
-
       try {
-        const normalizedPath = targetPath.trim().replace(/^"(.*)"$/, '$1')
-        const targetUri = vscode.Uri.file(normalizedPath)
-        createOrShowPanel(context)
+        const result = await gateExternalAnalysisUri(
+          { path: uri.path, query: uri.query, fragment: uri.fragment },
+          {
+            confirm: confirmExternalAnalysisRequest,
+            inspectPath: inspectExternalAnalysisTarget,
+            open: async request => {
+              const targetUri = vscode.Uri.file(request.targetPath)
+              createOrShowPanel(context)
+              if (request.route === 'analyze-file') {
+                await analyzeFileUri(targetUri)
+              } else {
+                await analyzeFolderUri(targetUri)
+              }
+            },
+          },
+        )
 
-        if (targetRoute === 'analyze-file') {
-          await analyzeFileUri(targetUri)
-          return
-        }
-        if (targetRoute === 'analyze-folder') {
-          await analyzeFolderUri(targetUri)
-          return
-        }
-
-        const lower = normalizedPath.toLowerCase()
-        const looksLikeFile = lower.endsWith('.zip') || lower.endsWith('.log') || lower.endsWith('.jsonl') || lower.endsWith('.txt')
-
-        if (looksLikeFile) {
-          await analyzeFileUri(targetUri)
-        } else {
-          await analyzeFolderUri(targetUri)
+        if (result.status === 'invalid') {
+          vscode.window.showWarningMessage(
+            t(
+              'Rejected an invalid external analysis request.',
+              '\u5df2\u62d2\u7edd\u65e0\u6548\u7684\u5916\u90e8\u5206\u6790\u8bf7\u6c42\u3002',
+            ),
+          )
+        } else if (result.status === 'type-mismatch') {
+          const expected = result.request.route === 'analyze-file'
+            ? t('a log file', '\u65e5\u5fd7\u6587\u4ef6')
+            : t('a log folder', '\u65e5\u5fd7\u6587\u4ef6\u5939')
+          vscode.window.showErrorMessage(
+            t(
+              `The approved path is not ${expected}.`,
+              `\u5df2\u6279\u51c6\u7684\u8def\u5f84\u4e0d\u662f${expected}\u3002`,
+            ),
+          )
         }
       } catch (error) {
         vscode.window.showErrorMessage(`无法处理外部打开请求: ${error}`)
@@ -346,6 +335,45 @@ export function activate(context: vscode.ExtensionContext) {
   })
 
   context.subscriptions.push(openAnalyzerCommand, analyzeFolderCommand, analyzeFileCommand, installContextMenuCommand, uninstallContextMenuCommand, sidebarView, uriHandler)
+}
+
+async function confirmExternalAnalysisRequest(request: ExternalAnalysisRequest): Promise<boolean> {
+  const approveLabel = t('Open and Analyze', '\u6253\u5f00\u5e76\u5206\u6790')
+  const targetKind = request.route === 'analyze-file'
+    ? t('file', '\u6587\u4ef6')
+    : t('folder', '\u6587\u4ef6\u5939')
+  const message = request.isUnc
+    ? t(
+        `An external application requested access to a network ${targetKind}.`,
+        `\u5916\u90e8\u5e94\u7528\u8bf7\u6c42\u8bbf\u95ee\u7f51\u7edc${targetKind}\u3002`,
+      )
+    : t(
+        `An external application requested access to a local ${targetKind}.`,
+        `\u5916\u90e8\u5e94\u7528\u8bf7\u6c42\u8bbf\u95ee\u672c\u5730${targetKind}\u3002`,
+      )
+  const detail = request.isUnc
+    ? t(
+        `Network path: ${request.targetPath}\n\nThis can contact a remote server. Continue only if you trust the application and network location that sent this request.`,
+        `\u7f51\u7edc\u8def\u5f84\uff1a${request.targetPath}\n\n\u8be5\u64cd\u4f5c\u53ef\u80fd\u8fde\u63a5\u8fdc\u7a0b\u670d\u52a1\u5668\u3002\u4ec5\u5f53\u4f60\u4fe1\u4efb\u53d1\u8d77\u8bf7\u6c42\u7684\u5e94\u7528\u548c\u7f51\u7edc\u4f4d\u7f6e\u65f6\u7ee7\u7eed\u3002`,
+      )
+    : t(
+        `Path: ${request.targetPath}\n\nContinue only if you initiated or trust this request.`,
+        `\u8def\u5f84\uff1a${request.targetPath}\n\n\u4ec5\u5f53\u8be5\u8bf7\u6c42\u7531\u4f60\u53d1\u8d77\u6216\u6765\u6e90\u53ef\u4fe1\u65f6\u7ee7\u7eed\u3002`,
+      )
+
+  const action = await vscode.window.showWarningMessage(
+    message,
+    { modal: true, detail },
+    approveLabel,
+  )
+  return action === approveLabel
+}
+
+async function inspectExternalAnalysisTarget(request: ExternalAnalysisRequest): Promise<ExternalPathKind> {
+  const stat = await vscode.workspace.fs.stat(vscode.Uri.file(request.targetPath))
+  if ((stat.type & vscode.FileType.Directory) === vscode.FileType.Directory) return 'folder'
+  if ((stat.type & vscode.FileType.File) === vscode.FileType.File) return 'file'
+  return 'other'
 }
 
 function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPanel {
