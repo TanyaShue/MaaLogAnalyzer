@@ -77,6 +77,9 @@ Subpath export:
   - `buildLineEvidence`
 - `@windsland52/maa-log-parser/service-tool-handlers`
   - `createAnalyzerToolHandlers`
+- `@windsland52/maa-log-parser/service-tool-protocol`
+  - `ANALYZER_TOOL_API_VERSION`
+  - `createAnalyzerToolDispatcher`
 - `@windsland52/maa-log-parser/types`
   - Type re-exports for parser-related data structures
 - `@windsland52/maa-log-parser/log-event-decoders`

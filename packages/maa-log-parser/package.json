@@ -71,6 +71,10 @@
       "import": "./dist/service/toolHandlers.js",
       "types": "./dist/service/toolHandlers.d.ts"
     },
+    "./service-tool-protocol": {
+      "import": "./dist/service/toolProtocol.js",
+      "types": "./dist/service/toolProtocol.d.ts"
+    },
     "./types": {
       "import": "./dist/shared/types.js",
       "types": "./dist/shared/types.d.ts"

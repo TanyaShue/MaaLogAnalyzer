@@ -26,7 +26,10 @@
 
 ## 3. 传输封装
 
-协议层可承载在 JSON-RPC 2.0 或等价调用总线之上。
+协议层可承载在 JSON-RPC 2.0 或等价调用总线之上。对不可信的外部 JSON
+请求，应使用 `createAnalyzerToolDispatcher().dispatch(request)` 进入统一协议边界；
+`createAnalyzerToolHandlers()` 是供进程内、已有类型约束的调用方使用的裸处理器，
+其参数和返回值不包含传输封装字段。
 
 统一请求体（逻辑结构）：
 
@@ -79,6 +82,10 @@
   }
 }
 ```
+
+当请求本身不合法且无法取得有效 `request_id` 时，响应中的 `request_id` 为
+`null`。响应的 `api_version` 始终表示 Analyzer 当前使用的协议版本；因此在
+`UNSUPPORTED_VERSION` 响应中，它可能与请求值不同。
 
 ---
 
@@ -411,7 +418,7 @@ interface Evidence {
 ## 9. 最小验收标准（V1）
 
 1. `parse_log_bundle` 可建立会话并返回 task/event 数量。
-2. 六个工具接口均可独立调用并返回结构化结果。
+2. 六个工具接口均可通过 `createAnalyzerToolDispatcher()` 独立调用并返回结构化结果。
 3. 工具返回可构造 `Evidence`，并能回溯到 task/node/line。
 4. 错误场景使用标准错误码并带 `retryable`。
 5. 多次调用结果在同输入下结构一致。
@@ -422,6 +429,6 @@ interface Evidence {
 
 ### V1
 
-1. 定义统一请求/响应封装。
+1. 定义统一请求/响应封装，并由 `createAnalyzerToolDispatcher()` 实现版本校验与请求关联。
 2. 定义六个基础工具接口。
 3. 定义证据模型、错误码与兼容性规则。

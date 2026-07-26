@@ -31,6 +31,10 @@ export { AnalyzerSessionStore, createAnalyzerSessionStore } from '../service/ses
 export type { AnalyzerSessionStoreOptions } from '../service/sessionStore'
 export { buildEvidence, buildLineEvidence } from '../service/evidenceBuilders'
 export { createAnalyzerToolHandlers } from '../service/toolHandlers'
+export {
+  ANALYZER_TOOL_API_VERSION,
+  createAnalyzerToolDispatcher,
+} from '../service/toolProtocol'
 export { projectTasksFromTrace } from '../projector/taskProjector'
 export type {
   AnalyzerInputResolver,
@@ -56,6 +60,13 @@ export type {
   ParseLogBundleResult,
   ResolvedLogSourceInput,
 } from '../service/types'
+export type {
+  AnalyzerToolDefinitionMap,
+  AnalyzerToolName,
+  AnalyzerToolProtocolRequest,
+  AnalyzerToolProtocolResponse,
+  AnalyzerToolResult,
+} from '../service/toolProtocol'
 export type {
   ProjectTasksFromTraceOptions,
   SequencedTaskEvent,
