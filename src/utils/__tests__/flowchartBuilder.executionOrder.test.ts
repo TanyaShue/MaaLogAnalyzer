@@ -316,4 +316,36 @@ describe('buildFlowchartData execution order', () => {
     expect(jumpNode?.data.status).toBe('failed')
     expect(jumpNode?.data.executionOrder).toEqual([1, 2])
   })
+
+  it('reuses an unchanged topology layout while refreshing runtime data', async () => {
+    const initialTask = makeTask([
+      makeNode({
+        nodeId: 71,
+        name: 'StableNode',
+        ts: '2026-04-07 10:00:50.100',
+        status: 'running',
+      }),
+    ])
+    const initial = await buildFlowchartData(initialTask)
+    const initialNode = initial.nodes.find(node => node.id === 'StableNode')
+    expect(initialNode).toBeDefined()
+    if (!initialNode) return
+    initialNode.position = { x: 777, y: 888 }
+
+    const refreshed = await buildFlowchartData(makeTask([
+      makeNode({
+        nodeId: 71,
+        name: 'StableNode',
+        ts: '2026-04-07 10:00:50.100',
+        status: 'failed',
+      }),
+    ]), {
+      previousNodes: initial.nodes,
+      previousEdges: initial.edges,
+    })
+
+    const refreshedNode = refreshed.nodes.find(node => node.id === 'StableNode')
+    expect(refreshedNode?.position).toEqual({ x: 777, y: 888 })
+    expect(refreshedNode?.data.status).toBe('failed')
+  })
 })

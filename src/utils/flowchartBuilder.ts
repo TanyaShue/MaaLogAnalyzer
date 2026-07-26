@@ -82,6 +82,46 @@ interface ElkLayoutEdge {
 
 export interface BuildFlowchartOptions {
   ignoreUnexecutedNodes?: boolean
+  previousNodes?: Node[]
+  previousEdges?: Edge[]
+}
+
+const reusePreviousLayout = (
+  nodes: Node[],
+  edges: Edge[],
+  previousNodes: Node[] | undefined,
+  previousEdges: Edge[] | undefined,
+): boolean => {
+  if (!previousNodes || !previousEdges) return false
+  if (nodes.length !== previousNodes.length || edges.length !== previousEdges.length) return false
+
+  const previousNodeById = new Map(previousNodes.map(node => [node.id, node]))
+  if (nodes.some(node => !previousNodeById.has(node.id))) return false
+
+  const previousEdgeById = new Map(previousEdges.map(edge => [edge.id, edge]))
+  if (edges.some((edge) => {
+    const previous = previousEdgeById.get(edge.id)
+    return !previous || previous.source !== edge.source || previous.target !== edge.target
+  })) return false
+
+  for (const node of nodes) {
+    const previous = previousNodeById.get(node.id)
+    if (!previous) return false
+    node.position = { ...previous.position }
+  }
+
+  for (const edge of edges) {
+    const previous = previousEdgeById.get(edge.id)
+    const previousRoutePoints = (previous?.data as FlowEdgeData | undefined)?.routePoints
+    if (!previousRoutePoints) continue
+    edge.data = {
+      ...(edge.data as FlowEdgeData),
+      routePoints: previousRoutePoints.map(point => ({ ...point })),
+    } satisfies FlowEdgeData
+    edge.type = previous?.type
+  }
+
+  return true
 }
 
 const hasFailedAction = (node: NodeInfo): boolean => {
@@ -109,7 +149,6 @@ const resolveFlowNodeStatus = (
 }
 
 export async function buildFlowchartData(task: TaskInfo, options: BuildFlowchartOptions = {}): Promise<{ nodes: Node[]; edges: Edge[] }> {
-  const elk = await getElk()
   const orderedNodes = sortNodesByGlobalExecutionOrder(task.nodes)
   const orderedExecutions = orderedNodes.map((node) => ({
     node,
@@ -296,7 +335,17 @@ export async function buildFlowchartData(task: TaskInfo, options: BuildFlowchart
     upsertExecutedEdge(current.executionName, nextExecution.executionName, toNodeStatus, transitionType)
   }
 
+  if (reusePreviousLayout(
+    flowNodes,
+    flowEdges,
+    options.previousNodes,
+    options.previousEdges,
+  )) {
+    return { nodes: flowNodes, edges: flowEdges }
+  }
+
   // 5. ELK layout (layout calculation only)
+  const elk = await getElk()
   const elkGraph: ElkLayoutNode = {
     id: 'root',
     layoutOptions: {
@@ -370,4 +419,3 @@ export async function buildFlowchartData(task: TaskInfo, options: BuildFlowchart
 
   return { nodes: flowNodes, edges: flowEdges }
 }
-

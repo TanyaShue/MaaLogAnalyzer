@@ -1,6 +1,7 @@
 import { nextTick, ref, watch, type Ref } from 'vue'
 import { buildFlowchartData } from '../../../utils/flowchartBuilder'
 import type { TaskInfo } from '../../../types'
+import { isSameTask } from '@windsland52/maa-log-tools/task-identity'
 
 interface UseFlowchartGraphRuntimeOptions {
   selectedTask: Ref<TaskInfo | null>
@@ -30,16 +31,31 @@ interface UseFlowchartGraphRuntimeOptions {
 
 export const useFlowchartGraphRuntime = (options: UseFlowchartGraphRuntimeOptions) => {
   const layoutRunId = ref(0)
+  let renderedTask: TaskInfo | null = null
 
-  const rebuildFlowchartLayout = async (task: TaskInfo, rebuildOptions?: { resetFocus?: boolean; fit?: boolean }) => {
+  const rebuildFlowchartLayout = async (
+    task: TaskInfo,
+    rebuildOptions?: { resetFocus?: boolean; fit?: boolean; preserveLayout?: boolean },
+  ) => {
     const runId = ++layoutRunId.value
     const { nodes, edges } = await buildFlowchartData(task, {
       ignoreUnexecutedNodes: options.ignoreUnexecutedNodes.value,
+      previousNodes: rebuildOptions?.preserveLayout ? options.flowNodes.value : undefined,
+      previousEdges: rebuildOptions?.preserveLayout ? options.flowEdges.value : undefined,
     })
     if (runId !== layoutRunId.value) return
 
     options.flowNodes.value = nodes
     options.flowEdges.value = options.decorateInitialEdges(edges as any[])
+    renderedTask = task
+
+    const renderedNodeIds = new Set(nodes.map(node => node.id))
+    if (options.focusedNodeId.value && !renderedNodeIds.has(options.focusedNodeId.value)) {
+      options.focusedNodeId.value = null
+    }
+    if (options.popoverNodeId.value && !renderedNodeIds.has(options.popoverNodeId.value)) {
+      options.closePopover()
+    }
 
     if (rebuildOptions?.resetFocus) {
       options.focusedNodeId.value = null
@@ -49,30 +65,52 @@ export const useFlowchartGraphRuntime = (options: UseFlowchartGraphRuntimeOption
 
     if (rebuildOptions?.fit) {
       nextTick(() => {
-        setTimeout(() => options.fitView({ padding: 0.2 }), 50)
+        setTimeout(() => {
+          if (renderedTask && isSameTask(renderedTask, task)) {
+            options.fitView({ padding: 0.2 })
+          }
+        }, 50)
       })
     }
 
     if (options.popoverNodeId.value) {
       nextTick(() => {
+        if (runId !== layoutRunId.value) return
         options.updatePopoverPosition()
-        requestAnimationFrame(options.updatePopoverPosition)
+        requestAnimationFrame(() => {
+          if (runId === layoutRunId.value) options.updatePopoverPosition()
+        })
       })
     }
   }
 
-  watch(options.selectedTask, async (task) => {
-    options.stopPlayback()
-    options.closePopover()
-    options.selectedTimelineIndex.value = null
-
+  watch(options.selectedTask, async (task, previousTask) => {
     if (!task) {
+      layoutRunId.value += 1
+      renderedTask = null
+      options.stopPlayback()
+      options.closePopover()
+      options.focusedNodeId.value = null
+      options.selectedTimelineIndex.value = null
       options.flowNodes.value = []
       options.flowEdges.value = []
       return
     }
 
-    await rebuildFlowchartLayout(task, { resetFocus: true, fit: true })
+    const sameSelectedTask = previousTask != null && isSameTask(task, previousTask)
+    if (!sameSelectedTask) {
+      options.stopPlayback()
+      options.closePopover()
+      options.selectedTimelineIndex.value = null
+      options.focusedNodeId.value = null
+    }
+
+    const preserveLayout = renderedTask != null && isSameTask(task, renderedTask)
+    await rebuildFlowchartLayout(task, {
+      resetFocus: !sameSelectedTask,
+      fit: !preserveLayout,
+      preserveLayout,
+    })
   }, { immediate: true })
 
   const onNodeDragStop = () => {
