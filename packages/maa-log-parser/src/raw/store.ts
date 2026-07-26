@@ -83,6 +83,24 @@ export const setRawLineSource = (
   return normalized
 }
 
+/**
+ * Store a newly-created source without copying its lines array.
+ * The caller transfers ownership and must not mutate the array afterward.
+ */
+export const adoptRawLineSource = (
+  store: RawLineStore,
+  source: RawLineSource,
+): RawLineSource => {
+  const adopted: RawLineSource = {
+    sourceKey: source.sourceKey,
+    sourcePath: source.sourcePath,
+    inputIndex: source.inputIndex,
+    lines: source.lines,
+  }
+  store.sources.set(adopted.sourceKey, adopted)
+  return adopted
+}
+
 export const appendRawLineSourceLines = (
   store: RawLineStore,
   source: Omit<RawLineSource, 'lines'>,

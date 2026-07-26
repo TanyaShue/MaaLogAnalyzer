@@ -27,9 +27,9 @@ import {
   type SequencedTaskEvent,
 } from '../projector/taskProjector'
 import {
+  adoptRawLineSource,
   cloneRawLineStore,
   createRawLineStore,
-  setRawLineSource,
   type RawLineStore,
 } from '../raw/store'
 import { cloneSnapshotData, freezeSnapshotData } from './snapshotIsolation'
@@ -350,7 +350,7 @@ export class LogParser {
 
     if (totalChars === 0) {
       if (rawLines) {
-        setRawLineSource(this.ensureRawLineStore(), {
+        adoptRawLineSource(this.ensureRawLineStore(), {
           ...sourceMeta,
           lines: rawLines,
         })
@@ -410,7 +410,7 @@ export class LogParser {
     }
 
     if (rawLines) {
-      setRawLineSource(this.ensureRawLineStore(), {
+      adoptRawLineSource(this.ensureRawLineStore(), {
         ...sourceMeta,
         lines: rawLines,
       })
