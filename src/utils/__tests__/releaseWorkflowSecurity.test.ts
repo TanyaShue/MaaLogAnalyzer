@@ -78,4 +78,15 @@ describe('release workflow shell safety', () => {
     expect(workflow).not.toMatch(/npm (?:i|install) -g/)
     expect(workflow).not.toMatch(/^\s*vsce\s/m)
   })
+
+  it('publishes VS Code packages only for stable version tags', () => {
+    const workflow = readWorkflow('release-vscode.yml')
+
+    expect(workflow).toContain(
+      "if: ${{ !startsWith(github.ref, 'refs/tags/v') || !contains(github.ref_name, '-') }}",
+    )
+    expect(workflow).toContain(
+      "if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')",
+    )
+  })
 })
