@@ -89,10 +89,9 @@ export class LoadOperationCoordinator {
 
   begin(): LoadOperation {
     this.currentOperation?.cancel()
-    let operation!: CoordinatedLoadOperation
-    operation = new CoordinatedLoadOperation(
+    const operation: CoordinatedLoadOperation = new CoordinatedLoadOperation(
       ++this.nextGeneration,
-      () => this.currentOperation === operation,
+      (): boolean => this.currentOperation === operation,
     )
     this.currentOperation = operation
     return operation
