@@ -964,7 +964,7 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} https://cloud.umami.is 'nonce-${nonce}'; worker-src blob:; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource}; connect-src https://cloud.umami.is https://gateway.umami.is;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}'; worker-src blob:; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource}; connect-src ${webview.cspSource} data: blob:;">
   <title>MAA 日志分析器</title>
   <link rel="stylesheet" href="${webviewUri}/assets/index.css">
   <style>
@@ -998,7 +998,6 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
 </head>
 <body>
   <div id="app"></div>
-  <script nonce="${nonce}" async src="https://cloud.umami.is/script.js" data-website-id="14964f46-1293-4fc8-82c3-09446ba85c11"></script>
   <script nonce="${nonce}">
     // 注入 VS Code API
     const vscode = acquireVsCodeApi();
