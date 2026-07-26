@@ -28,4 +28,20 @@ describe('tutorial progress persistence', () => {
     expect(() => markCurrentTutorialVersionCompleted('tour', 3, ['open-file']))
       .not.toThrow()
   })
+
+  it('replaces an invalid persisted array with structured progress', () => {
+    let saved = '[]'
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn(() => saved),
+      setItem: vi.fn((_key: string, value: string) => { saved = value }),
+    })
+
+    markCurrentTutorialVersionCompleted('tour', 3, ['open-file'])
+
+    expect(JSON.parse(saved)).toMatchObject({
+      completedVersion: 3,
+      completedStepIds: ['open-file'],
+      activeVersion: 3,
+    })
+  })
 })

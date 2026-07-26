@@ -9,6 +9,10 @@ export interface TutorialStepLike {
   sinceVersion?: number
 }
 
+const isRecord = (value: unknown): value is Record<string, any> => (
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+)
+
 export function readTutorialProgressState(storageKey: string): TutorialProgressState {
   try {
     const raw = localStorage.getItem(storageKey)
@@ -20,7 +24,7 @@ export function readTutorialProgressState(storageKey: string): TutorialProgressS
     }
 
     const parsed = JSON.parse(raw) as any
-    if (!parsed || typeof parsed !== 'object') {
+    if (!isRecord(parsed)) {
       return { completedVersion: 0, completedStepIds: new Set(), rawObject: null }
     }
 
@@ -36,7 +40,7 @@ export function readTutorialProgressState(storageKey: string): TutorialProgressS
       })
     }
 
-    if (parsed.versions && typeof parsed.versions === 'object') {
+    if (isRecord(parsed.versions)) {
       for (const [ver, info] of Object.entries(parsed.versions as Record<string, any>)) {
         const v = Number(ver)
         if (Number.isFinite(v) && info && typeof info === 'object' && info.completed === true) {
@@ -71,11 +75,11 @@ export function markCurrentTutorialVersionCompleted(
     const merged = new Set(state.completedStepIds)
     stepIds.forEach(id => merged.add(id))
 
-    const obj = state.rawObject && typeof state.rawObject === 'object' ? state.rawObject : {}
+    const obj = isRecord(state.rawObject) ? state.rawObject : {}
     obj.completedVersion = Math.max(state.completedVersion, tourVersion)
     obj.completedStepIds = Array.from(merged)
     obj.activeVersion = tourVersion
-    if (!obj.versions || typeof obj.versions !== 'object') obj.versions = {}
+    if (!isRecord(obj.versions)) obj.versions = {}
     const verKey = String(tourVersion)
     const prev = obj.versions[verKey] && typeof obj.versions[verKey] === 'object' ? obj.versions[verKey] : {}
     obj.versions[verKey] = {
