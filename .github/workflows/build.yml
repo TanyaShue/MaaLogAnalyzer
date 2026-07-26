@@ -21,7 +21,7 @@ jobs:
       - name: 安装 pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
-          version: 10
+          version: 10.34.5
           run_install: false
 
       - name: 安装 Node.js
@@ -81,7 +81,7 @@ jobs:
       - name: 安装 pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
-          version: 10
+          version: 10.34.5
           run_install: false
 
       - name: 安装 Node.js
@@ -133,7 +133,7 @@ jobs:
       - name: 安装 pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
-          version: 10
+          version: 10.34.5
           run_install: false
 
       - name: 安装 Node.js

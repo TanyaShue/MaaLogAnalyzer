@@ -9,6 +9,7 @@
     "url": "https://github.com/MaaXYZ/MaaLogAnalyzer"
   },
   "type": "module",
+  "packageManager": "pnpm@10.34.5",
   "scripts": {
     "dev": "pnpm build:packages && vite",
     "build": "pnpm build:packages && vue-tsc && vite build",
