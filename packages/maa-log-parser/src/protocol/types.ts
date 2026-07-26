@@ -57,15 +57,15 @@ export interface ControllerActionEvent extends ProtocolEventBase<'controller_act
 }
 
 export interface TaskEvent extends ProtocolEventBase<'task'> {
-  taskId?: number
+  taskId: number
   entry?: string
   uuid?: string
   hash?: string
 }
 
 export interface PipelineNodeEvent extends ProtocolEventBase<'pipeline_node'> {
-  taskId?: number
-  nodeId?: number
+  taskId: number
+  nodeId: number
   name?: string
   focus?: unknown
   nodeDetails?: EventDetails
@@ -74,8 +74,8 @@ export interface PipelineNodeEvent extends ProtocolEventBase<'pipeline_node'> {
 }
 
 export interface RecognitionNodeEvent extends ProtocolEventBase<'recognition_node'> {
-  taskId?: number
-  nodeId?: number
+  taskId: number
+  nodeId: number
   recoId?: number
   name?: string
   focus?: unknown
@@ -84,8 +84,8 @@ export interface RecognitionNodeEvent extends ProtocolEventBase<'recognition_nod
 }
 
 export interface ActionNodeEvent extends ProtocolEventBase<'action_node'> {
-  taskId?: number
-  nodeId?: number
+  taskId: number
+  nodeId: number
   actionId?: number
   name?: string
   focus?: unknown
@@ -94,15 +94,15 @@ export interface ActionNodeEvent extends ProtocolEventBase<'action_node'> {
 }
 
 export interface NextListEvent extends ProtocolEventBase<'next_list'> {
-  taskId?: number
+  taskId: number
   name?: string
   list?: ProtocolNextListItem[]
   focus?: unknown
 }
 
 export interface RecognitionEvent extends ProtocolEventBase<'recognition'> {
-  taskId?: number
-  recoId?: number
+  taskId: number
+  recoId: number
   name?: string
   focus?: unknown
   anchor?: string
@@ -110,16 +110,16 @@ export interface RecognitionEvent extends ProtocolEventBase<'recognition'> {
 }
 
 export interface ActionEvent extends ProtocolEventBase<'action'> {
-  taskId?: number
-  actionId?: number
+  taskId: number
+  actionId: number
   name?: string
   focus?: unknown
   actionDetails?: EventDetails
 }
 
 export interface WaitFreezesEvent extends ProtocolEventBase<'wait_freezes'> {
-  taskId?: number
-  wfId?: number
+  taskId: number
+  wfId: number
   name?: string
   waitPhase?: string
   roi?: [number, number, number, number]

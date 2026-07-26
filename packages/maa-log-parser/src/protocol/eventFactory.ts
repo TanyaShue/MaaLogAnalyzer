@@ -78,10 +78,14 @@ const readNextList = (value: unknown): ProtocolNextListItem[] | undefined => {
   return items
 }
 
-const requireTaskId = <T extends { taskId?: number }>(
-  event: T,
-): T | null => {
-  return event.taskId != null ? event : null
+const readPositiveSafeIntegerField = (
+  details: EventDetails,
+  field: string,
+): number | undefined => {
+  const value = readNumberField(details, field)
+  return value !== undefined && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined
 }
 
 const buildBase = <TKind extends ProtocolEvent['kind']>(
@@ -149,96 +153,126 @@ export const createProtocolEvent = (
   }
 
   if (meta.domain === 'Tasker' && meta.taskerKind === 'Task') {
+    const taskId = readPositiveSafeIntegerField(details, 'task_id')
+    if (taskId === undefined) return null
+
     const protocolEvent: TaskEvent = {
       ...buildBase(event, options, 'task', phase),
-      taskId: readNumberField(details, 'task_id'),
+      taskId,
       entry: readStringField(details, 'entry'),
       uuid: readStringField(details, 'uuid'),
       hash: readStringField(details, 'hash'),
     }
-    return requireTaskId(protocolEvent)
+    return protocolEvent
   }
 
   if (meta.domain !== 'Node') return null
 
   switch (meta.nodeKind) {
     case 'PipelineNode': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      const nodeId = readPositiveSafeIntegerField(details, 'node_id')
+      if (taskId === undefined || nodeId === undefined) return null
+
       const protocolEvent: PipelineNodeEvent = {
         ...buildBase(event, options, 'pipeline_node', phase),
-        taskId: readNumberField(details, 'task_id'),
-        nodeId: readNumberField(details, 'node_id'),
+        taskId,
+        nodeId,
         name: readStringField(details, 'name'),
         focus: readUnknownField(details, 'focus'),
         nodeDetails: readRecord(readUnknownField(details, 'node_details')),
         recoDetails: readRecord(readUnknownField(details, 'reco_details')),
         actionDetails: readRecord(readUnknownField(details, 'action_details')),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     case 'RecognitionNode': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      const nodeId = readPositiveSafeIntegerField(details, 'node_id')
+      if (taskId === undefined || nodeId === undefined) return null
+
       const protocolEvent: RecognitionNodeEvent = {
         ...buildBase(event, options, 'recognition_node', phase),
-        taskId: readNumberField(details, 'task_id'),
-        nodeId: readNumberField(details, 'node_id'),
-        recoId: readNumberField(details, 'reco_id'),
+        taskId,
+        nodeId,
+        recoId: readPositiveSafeIntegerField(details, 'reco_id'),
         name: readStringField(details, 'name'),
         focus: readUnknownField(details, 'focus'),
         nodeDetails: readRecord(readUnknownField(details, 'node_details')),
         recoDetails: readRecord(readUnknownField(details, 'reco_details')),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     case 'ActionNode': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      const nodeId = readPositiveSafeIntegerField(details, 'node_id')
+      if (taskId === undefined || nodeId === undefined) return null
+
       const protocolEvent: ActionNodeEvent = {
         ...buildBase(event, options, 'action_node', phase),
-        taskId: readNumberField(details, 'task_id'),
-        nodeId: readNumberField(details, 'node_id'),
-        actionId: readNumberField(details, 'action_id'),
+        taskId,
+        nodeId,
+        actionId: readPositiveSafeIntegerField(details, 'action_id'),
         name: readStringField(details, 'name'),
         focus: readUnknownField(details, 'focus'),
         nodeDetails: readRecord(readUnknownField(details, 'node_details')),
         actionDetails: readRecord(readUnknownField(details, 'action_details')),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     case 'NextList': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      if (taskId === undefined) return null
+
       const protocolEvent: NextListEvent = {
         ...buildBase(event, options, 'next_list', phase),
-        taskId: readNumberField(details, 'task_id'),
+        taskId,
         name: readStringField(details, 'name'),
         list: readNextList(readUnknownField(details, 'list')),
         focus: readUnknownField(details, 'focus'),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     case 'Recognition': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      const recoId = readPositiveSafeIntegerField(details, 'reco_id')
+      if (taskId === undefined || recoId === undefined) return null
+
       const protocolEvent: RecognitionEvent = {
         ...buildBase(event, options, 'recognition', phase),
-        taskId: readNumberField(details, 'task_id'),
-        recoId: readNumberField(details, 'reco_id'),
+        taskId,
+        recoId,
         name: readStringField(details, 'name'),
         focus: readUnknownField(details, 'focus'),
         anchor: readStringField(details, 'anchor'),
         recoDetails: readRecord(readUnknownField(details, 'reco_details')),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     case 'Action': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      const actionId = readPositiveSafeIntegerField(details, 'action_id')
+      if (taskId === undefined || actionId === undefined) return null
+
       const protocolEvent: ActionEvent = {
         ...buildBase(event, options, 'action', phase),
-        taskId: readNumberField(details, 'task_id'),
-        actionId: readNumberField(details, 'action_id'),
+        taskId,
+        actionId,
         name: readStringField(details, 'name'),
         focus: readUnknownField(details, 'focus'),
         actionDetails: readRecord(readUnknownField(details, 'action_details')),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     case 'WaitFreezes': {
+      const taskId = readPositiveSafeIntegerField(details, 'task_id')
+      const wfId = readPositiveSafeIntegerField(details, 'wf_id')
+      if (taskId === undefined || wfId === undefined) return null
+
       const protocolEvent: WaitFreezesEvent = {
         ...buildBase(event, options, 'wait_freezes', phase),
-        taskId: readNumberField(details, 'task_id'),
-        wfId: readNumberField(details, 'wf_id'),
+        taskId,
+        wfId,
         name: readStringField(details, 'name'),
         waitPhase: readStringField(details, 'phase'),
         roi: parseRoi(readUnknownField(details, 'roi')),
@@ -247,7 +281,7 @@ export const createProtocolEvent = (
         elapsed: readNumberField(details, 'elapsed'),
         focus: readUnknownField(details, 'focus'),
       }
-      return requireTaskId(protocolEvent)
+      return protocolEvent
     }
     default:
       return null

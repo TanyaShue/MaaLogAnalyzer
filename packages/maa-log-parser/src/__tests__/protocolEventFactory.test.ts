@@ -7,6 +7,72 @@ import {
 
 const identity = (value: string) => value
 
+const createEvent = (
+  message: string,
+  details: Record<string, unknown>,
+) => {
+  const line = `[2026-04-08 00:01:02.345][INF][Px1][Tx2][test] !!!OnEventNotify!!! [handle=1] [msg=${message}] [details=${JSON.stringify(details)}]`
+  const parsed = parseEventLine(line, 1, {
+    internEventToken: identity,
+    forceCopyString: identity,
+  })
+
+  expect(parsed).toBeTruthy()
+  return createProtocolEvent(parsed!, { seq: 1 })
+}
+
+const REQUIRED_SCOPE_ID_CASES = [
+  {
+    message: 'Tasker.Task.Starting',
+    details: { task_id: 1 },
+    requiredFields: ['task_id'],
+  },
+  {
+    message: 'Node.PipelineNode.Starting',
+    details: { task_id: 1, node_id: 2 },
+    requiredFields: ['task_id', 'node_id'],
+  },
+  {
+    message: 'Node.RecognitionNode.Starting',
+    details: { task_id: 1, node_id: 2 },
+    requiredFields: ['task_id', 'node_id'],
+  },
+  {
+    message: 'Node.ActionNode.Starting',
+    details: { task_id: 1, node_id: 2 },
+    requiredFields: ['task_id', 'node_id'],
+  },
+  {
+    message: 'Node.NextList.Starting',
+    details: { task_id: 1 },
+    requiredFields: ['task_id'],
+  },
+  {
+    message: 'Node.Recognition.Starting',
+    details: { task_id: 1, reco_id: 3 },
+    requiredFields: ['task_id', 'reco_id'],
+  },
+  {
+    message: 'Node.Action.Starting',
+    details: { task_id: 1, action_id: 4 },
+    requiredFields: ['task_id', 'action_id'],
+  },
+  {
+    message: 'Node.WaitFreezes.Starting',
+    details: { task_id: 1, wf_id: 5 },
+    requiredFields: ['task_id', 'wf_id'],
+  },
+] as const
+
+const INVALID_SCOPE_IDS: unknown[] = [
+  undefined,
+  0,
+  -1,
+  1.5,
+  Number.MAX_SAFE_INTEGER + 1,
+  '1',
+]
+
 describe('ProtocolEventFactory', () => {
   it('creates task protocol event with SourceRef metadata', () => {
     const line = '[2026-04-08 00:01:02.345][INF][Px1][Tx2][test] !!!OnEventNotify!!! [handle=1] [msg=Tasker.Task.Starting] [details={"task_id":1,"entry":"Main","uuid":"u-1","hash":"h-1"}]'
@@ -77,6 +143,53 @@ describe('ProtocolEventFactory', () => {
         inputIndex: 0,
         line: 12,
       },
+    })
+  })
+
+  it.each(REQUIRED_SCOPE_ID_CASES)(
+    'rejects $message when a required scope ID is not a positive safe integer',
+    ({ message, details, requiredFields }) => {
+      expect(createEvent(message, details)).not.toBeNull()
+
+      for (const field of requiredFields) {
+        for (const invalidValue of INVALID_SCOPE_IDS) {
+          expect(createEvent(message, {
+            ...details,
+            [field]: invalidValue,
+          })).toBeNull()
+        }
+      }
+    },
+  )
+
+  it('accepts the largest positive safe integer as a required scope ID', () => {
+    expect(createEvent('Tasker.Task.Starting', {
+      task_id: Number.MAX_SAFE_INTEGER,
+    })).toMatchObject({
+      kind: 'task',
+      taskId: Number.MAX_SAFE_INTEGER,
+    })
+  })
+
+  it('normalizes invalid optional node operation IDs without changing nested details', () => {
+    expect(createEvent('Node.RecognitionNode.Starting', {
+      task_id: 1,
+      node_id: 2,
+      reco_id: 0,
+    })).toMatchObject({
+      kind: 'recognition_node',
+      recoId: undefined,
+    })
+
+    expect(createEvent('Node.ActionNode.Starting', {
+      task_id: 1,
+      node_id: 2,
+      action_id: 0,
+      node_details: { action_id: 0 },
+    })).toMatchObject({
+      kind: 'action_node',
+      actionId: undefined,
+      nodeDetails: { action_id: 0 },
     })
   })
 
