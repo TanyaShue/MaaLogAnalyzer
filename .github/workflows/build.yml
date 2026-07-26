@@ -219,8 +219,11 @@ jobs:
         with:
           path: artifacts/
 
-      - name: 显示下载的文件
-        run: find artifacts/ -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" -o -name "*.app.tar.gz" \)
+      - name: 验证并整理发布产物
+        run: node scripts/prepare-release-assets.mjs artifacts release-assets
+
+      - name: 显示发布文件
+        run: find release-assets/ -maxdepth 1 -type f -print
 
       - name: 创建 Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -238,6 +241,7 @@ jobs:
 
             ### 桌面端安装包
             - Windows (.msi)、macOS (.dmg) 与 Linux (.deb) 安装包见本页附件
+            - 可使用附件中的 SHA256SUMS 校验下载完整性
 
             ## 📝 更新内容
             ${{ needs.changelog.outputs.release_body }}
@@ -247,9 +251,6 @@ jobs:
             构建于: ${{ github.event.head_commit.timestamp }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            artifacts/*-artifacts/**/*.msi
-            artifacts/*-artifacts/**/*.dmg
-            artifacts/*-artifacts/**/*.deb
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

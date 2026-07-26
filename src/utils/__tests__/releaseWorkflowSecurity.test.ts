@@ -65,6 +65,8 @@ describe('release workflow shell safety', () => {
     )
     expect(workflow).toContain("prerelease: ${{ contains(github.ref_name, '-') }}")
     expect(workflow).not.toContain('prerelease: false')
+    expect(workflow).toContain('node scripts/prepare-release-assets.mjs artifacts release-assets')
+    expect(workflow).toContain('files: release-assets/*')
   })
 
   it('uses lock files and the local VS Code packaging toolchain', () => {
