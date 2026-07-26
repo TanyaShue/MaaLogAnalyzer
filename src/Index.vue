@@ -8,6 +8,7 @@ import json from 'highlight.js/lib/languages/json'
 import { BRIDGE_THEME_UPDATED_EVENT } from './utils/bridgeEvents'
 import { parseEmbedMode, EMBED_MODE_VSCODE_LAUNCH } from './utils/embedMode'
 import { isVSCode } from './utils/platform'
+import { readThemePreference, writeThemePreference } from './utils/themePreference'
 
 // 注册 JSON 语言支持
 hljs.registerLanguage('json', json)
@@ -103,7 +104,7 @@ const pickCssVarColor = (styleDecl: CSSStyleDeclaration | null, names: string[],
 
 const handleSystemThemeChange = (e: MediaQueryListEvent) => {
   // 只有在用户没有手动设置过主题时才跟随系统
-  if (!localStorage.getItem('theme')) {
+  if (readThemePreference() === null) {
     isDark.value = e.matches
   }
   refreshVscodeTheme()
@@ -128,8 +129,8 @@ onMounted(() => {
     // VS Code 场景下不走应用内手动深浅色偏好。
     isDark.value = getSystemTheme()
   } else {
-    const savedTheme = localStorage.getItem('theme')
-    if (savedTheme) {
+    const savedTheme = readThemePreference()
+    if (savedTheme !== null) {
       isDark.value = savedTheme === 'dark'
     } else {
       // 没有保存的偏好，跟随系统主题
@@ -171,7 +172,7 @@ const updateThemeColor = (dark: boolean) => {
     
     // 添加/移除 body 类
     document.body.classList.remove('force-light', 'force-dark')
-    if (!isVscodeThemeContext.value && localStorage.getItem('theme')) {
+    if (!isVscodeThemeContext.value && readThemePreference() !== null) {
       // 用户手动设置了主题
       document.body.classList.add(dark ? 'force-dark' : 'force-light')
     }
@@ -182,7 +183,7 @@ const updateThemeColor = (dark: boolean) => {
 const toggleTheme = () => {
   if (isVscodeThemeContext.value) return
   isDark.value = !isDark.value
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+  writeThemePreference(isDark.value ? 'dark' : 'light')
   updateThemeColor(isDark.value)
   refreshVscodeTheme()
 }
