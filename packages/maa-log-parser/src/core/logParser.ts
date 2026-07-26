@@ -147,6 +147,7 @@ export class LogParser {
   private errorImages = new Map<string, string>()
   private visionImages = new Map<string, string>()
   private waitFreezesImages = new Map<string, string>()
+  private fullParseInProgress = false
 
   /**
    * 设置错误截图映射
@@ -423,46 +424,54 @@ export class LogParser {
     if (!Number.isSafeInteger(chunkLineCount) || chunkLineCount <= 0) {
       throw new RangeError('chunkLineCount must be a positive safe integer')
     }
+    if (this.fullParseInProgress) {
+      throw new Error('A full parse is already in progress for this LogParser instance')
+    }
 
-    this.resetParsedEvents()
+    this.fullParseInProgress = true
+    try {
+      this.resetParsedEvents()
 
-    const normalizedInputs = normalizeParseSourceInputs(inputs)
-    const totalChars = normalizedInputs.reduce((sum, input) => sum + input.content.length, 0)
-    const yieldControl = options?.yieldControl === undefined
-      ? defaultParseYieldControl
-      : options.yieldControl
-    const storeRawLines = options?.storeRawLines === true
+      const normalizedInputs = normalizeParseSourceInputs(inputs)
+      const totalChars = normalizedInputs.reduce((sum, input) => sum + input.content.length, 0)
+      const yieldControl = options?.yieldControl === undefined
+        ? defaultParseYieldControl
+        : options.yieldControl
+      const storeRawLines = options?.storeRawLines === true
 
-    if (normalizedInputs.length === 0) {
+      if (normalizedInputs.length === 0) {
+        if (onProgress) {
+          onProgress({
+            current: 0,
+            total: 0,
+            percentage: 100,
+          })
+        }
+        return
+      }
+
+      let progressOffset = 0
+      for (const input of normalizedInputs) {
+        const parsedChars = await this.parseSourceContent(input, {
+          onProgress,
+          chunkLineCount,
+          yieldControl,
+          progressOffset,
+          totalChars,
+          storeRawLines,
+        })
+        progressOffset += parsedChars
+      }
+
       if (onProgress) {
         onProgress({
-          current: 0,
-          total: 0,
+          current: totalChars,
+          total: totalChars,
           percentage: 100,
         })
       }
-      return
-    }
-
-    let progressOffset = 0
-    for (const input of normalizedInputs) {
-      const parsedChars = await this.parseSourceContent(input, {
-        onProgress,
-        chunkLineCount,
-        yieldControl,
-        progressOffset,
-        totalChars,
-        storeRawLines,
-      })
-      progressOffset += parsedChars
-    }
-
-    if (onProgress) {
-      onProgress({
-        current: totalChars,
-        total: totalChars,
-        percentage: 100,
-      })
+    } finally {
+      this.fullParseInProgress = false
     }
   }
 
