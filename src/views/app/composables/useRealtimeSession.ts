@@ -23,6 +23,7 @@ export const useRealtimeSession = (options: UseRealtimeSessionOptions) => {
     scheduleRealtimeParse,
     clearRealtimeParseTimer,
     resetParseState,
+    realtimeParseFailed,
   } = createRealtimeParseScheduler({
     parseIntervalMs: options.parseIntervalMs,
     realtimeSession,
@@ -114,6 +115,7 @@ export const useRealtimeSession = (options: UseRealtimeSessionOptions) => {
   return {
     realtimeSession,
     realtimeStreaming,
+    realtimeParseFailed,
     stopRealtimeSession,
     handleRealtimeStart,
     handleRealtimePush,

@@ -31,6 +31,7 @@ const props = defineProps<{
   displayMode: string
   showRealtimeStatus: boolean
   isRealtimeStreaming: boolean
+  realtimeParseFailed: boolean
   followLast: boolean
   showReloadControls: boolean
   reloadOptions: ReloadOption[]
@@ -110,6 +111,7 @@ const handleSelectNodeNavItem = (item: NodeNavViewItem) => {
       <process-timeline-toolbar
         :show-realtime-status="showRealtimeStatus"
         :is-realtime-streaming="isRealtimeStreaming"
+        :realtime-parse-failed="realtimeParseFailed"
         :follow-last="followLast"
         :show-reload-controls="showReloadControls"
         :reload-options="reloadOptions"

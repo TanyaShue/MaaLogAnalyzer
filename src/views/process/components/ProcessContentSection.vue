@@ -33,6 +33,7 @@ const props = defineProps<{
   currentNodes: NodeTimelineItem[]
   showRealtimeStatus: boolean
   isRealtimeStreaming: boolean
+  realtimeParseFailed: boolean
   followLast: boolean
   pendingScrollNodeId?: number | null
   taskListCollapsed: boolean
@@ -129,6 +130,7 @@ const props = defineProps<{
         :display-mode="props.settingsDisplayMode"
         :show-realtime-status="props.showRealtimeStatus"
         :is-realtime-streaming="props.isRealtimeStreaming"
+        :realtime-parse-failed="props.realtimeParseFailed"
         :follow-last="props.followLast"
         :show-reload-controls="props.showReloadControls"
         :reload-options="props.reloadOptions"

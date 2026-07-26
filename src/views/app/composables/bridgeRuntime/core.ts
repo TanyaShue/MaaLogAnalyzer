@@ -75,6 +75,7 @@ export const useBridgeRuntimeCore = (options: UseBridgeRuntimeCoreOptions) => {
   const {
     realtimeSession,
     realtimeStreaming,
+    realtimeParseFailed,
     stopRealtimeSession,
     handleRealtimeStart,
     handleRealtimePush,
@@ -146,6 +147,7 @@ export const useBridgeRuntimeCore = (options: UseBridgeRuntimeCoreOptions) => {
     getBridge: () => bridge,
     realtimeSession,
     realtimeStreaming,
+    realtimeParseFailed,
     stopRealtimeSession,
     cleanupRealtimeSession,
     isRealtimeContext,

@@ -19,6 +19,7 @@ interface UseMainContentBindingsOptions {
   pendingScrollNodeId: Ref<number | null>
   followLast: Ref<boolean>
   realtimeStreaming: Ref<boolean>
+  realtimeParseFailed: Ref<boolean>
   showRealtimeStatus: boolean
   showReloadControls: boolean
   detailViewCollapsed: Ref<boolean>
@@ -77,6 +78,7 @@ export const useMainContentBindings = (options: UseMainContentBindingsOptions) =
     pendingScrollNodeId: options.pendingScrollNodeId.value,
     followLast: options.followLast.value,
     isRealtimeStreaming: options.realtimeStreaming.value,
+    realtimeParseFailed: options.realtimeParseFailed.value,
     showRealtimeStatus: options.showRealtimeStatus,
     showReloadControls: options.showReloadControls,
   }))

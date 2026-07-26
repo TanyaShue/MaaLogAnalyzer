@@ -7,6 +7,7 @@ import { useMainContentBindings } from './useMainContentBindings'
 describe('useMainContentBindings realtime status', () => {
   it('uses active streaming state instead of retained realtime context', () => {
     const realtimeStreaming = ref(false)
+    const realtimeParseFailed = ref(false)
     const bindings = useMainContentBindings({
       filteredTasks: shallowRef<TaskInfo[]>([]),
       selectedTask: shallowRef(null),
@@ -20,6 +21,7 @@ describe('useMainContentBindings realtime status', () => {
       pendingScrollNodeId: ref(null),
       followLast: ref(true),
       realtimeStreaming,
+      realtimeParseFailed,
       showRealtimeStatus: true,
       showReloadControls: false,
       detailViewCollapsed: ref(false),
@@ -50,8 +52,11 @@ describe('useMainContentBindings realtime status', () => {
     })
 
     expect(bindings.processViewMobileProps.value.isRealtimeStreaming).toBe(false)
+    expect(bindings.processViewMobileProps.value.realtimeParseFailed).toBe(false)
 
     realtimeStreaming.value = true
+    realtimeParseFailed.value = true
     expect(bindings.processViewMobileProps.value.isRealtimeStreaming).toBe(true)
+    expect(bindings.processViewMobileProps.value.realtimeParseFailed).toBe(true)
   })
 })

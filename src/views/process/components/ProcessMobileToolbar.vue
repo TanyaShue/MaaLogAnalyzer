@@ -7,6 +7,7 @@ defineProps<{
   selectedTaskEntry: string
   showRealtimeStatus: boolean
   isRealtimeStreaming: boolean
+  realtimeParseFailed: boolean
   followLast: boolean
   showReloadControls: boolean
   reloadOptions: DropdownOption[]
@@ -34,11 +35,11 @@ const handleReloadSelect = (key: string | number) => {
     <n-button
       v-if="showRealtimeStatus"
       size="small"
-      :type="isRealtimeStreaming && followLast ? 'primary' : 'default'"
+      :type="realtimeParseFailed ? 'error' : (isRealtimeStreaming && followLast ? 'primary' : 'default')"
       :disabled="!isRealtimeStreaming"
       @click="emit('toggle-follow')"
     >
-      {{ isRealtimeStreaming ? (followLast ? '跟随中' : '跟随最新') : '未实时' }}
+      {{ realtimeParseFailed ? '解析异常' : (isRealtimeStreaming ? (followLast ? '跟随中' : '跟随最新') : '未实时') }}
     </n-button>
     <n-dropdown v-if="showReloadControls" :options="reloadOptions" @select="handleReloadSelect">
       <n-button size="small">

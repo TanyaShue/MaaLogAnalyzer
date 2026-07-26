@@ -128,6 +128,7 @@ export const useAppRootViewModel = ({
   const {
     stopRealtimeSession,
     realtimeStreaming,
+    realtimeParseFailed,
     bridgeRecognitionImages,
     bridgeRecognitionImageRefs,
     bridgeRecognitionLoading,
@@ -234,6 +235,7 @@ export const useAppRootViewModel = ({
     pendingScrollNodeId,
     followLast,
     realtimeStreaming,
+    realtimeParseFailed,
     showRealtimeStatus,
     showReloadControls,
     detailViewCollapsed,

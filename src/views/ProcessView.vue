@@ -26,6 +26,7 @@ const props = defineProps<{
   pendingScrollNodeId?: number | null
   followLast?: boolean
   isRealtimeStreaming?: boolean
+  realtimeParseFailed?: boolean
   showRealtimeStatus?: boolean
   showReloadControls?: boolean
   isVscodeLaunchEmbed?: boolean
@@ -181,6 +182,7 @@ void fileInputRef
       :selected-task-entry="selectedTask?.entry || ''"
       :show-realtime-status="showRealtimeStatus || props.isVscodeLaunchEmbed === true"
       :is-realtime-streaming="isRealtimeStreaming"
+      :realtime-parse-failed="props.realtimeParseFailed === true"
       :follow-last="followLast"
       :show-reload-controls="showReloadControls"
       :reload-options="reloadOptions"
@@ -207,6 +209,7 @@ void fileInputRef
       :current-nodes="currentNodes"
       :show-realtime-status="showRealtimeStatus"
       :is-realtime-streaming="isRealtimeStreaming"
+      :realtime-parse-failed="props.realtimeParseFailed === true"
       :follow-last="followLast"
       :pending-scroll-node-id="pendingScrollNodeId"
       :task-list-collapsed="taskListCollapsed"

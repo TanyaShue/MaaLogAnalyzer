@@ -68,6 +68,7 @@ describe('createRealtimeParseScheduler', () => {
     expect(session.pendingLines).toEqual(['head', 'tail'])
     expect(session.lastSeq).toBe(1)
     expect(harness.appendRealtimeLines).toHaveBeenNthCalledWith(1, ['head'])
+    expect(harness.scheduler.realtimeParseFailed.value).toBe(true)
 
     await vi.advanceTimersByTimeAsync(PARSE_INTERVAL_MS)
 
@@ -75,6 +76,7 @@ describe('createRealtimeParseScheduler', () => {
     expect(session.pendingLines).toEqual([])
     expect(harness.applyParsedTasks).toHaveBeenCalledTimes(1)
     expect(harness.syncRealtimeLoadedTarget).toHaveBeenCalledTimes(1)
+    expect(harness.scheduler.realtimeParseFailed.value).toBe(false)
   })
 
   it('does not append an acknowledged batch again when projection fails', async () => {
@@ -132,8 +134,10 @@ describe('createRealtimeParseScheduler', () => {
     expect(session.lastSeq).toBe(1)
     expect(vi.getTimerCount()).toBe(0)
     expect(harness.getTasksSnapshot).not.toHaveBeenCalled()
+    expect(harness.scheduler.realtimeParseFailed.value).toBe(true)
 
     harness.scheduler.resetParseState()
+    expect(harness.scheduler.realtimeParseFailed.value).toBe(false)
     await harness.scheduler.runRealtimeParse()
 
     expect(harness.appendRealtimeLines).toHaveBeenCalledTimes(5)

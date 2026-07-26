@@ -17,6 +17,7 @@ export const createRealtimeParseScheduler = (
 ) => {
   const realtimeParsing = ref(false)
   const realtimeReparseRequested = ref(false)
+  const realtimeParseFailed = ref(false)
   let realtimeParseTimer: number | null = null
   let realtimeParseRetryCount = 0
 
@@ -44,8 +45,10 @@ export const createRealtimeParseScheduler = (
       const parsedTasks = options.getTasksSnapshot()
       options.applyParsedTasks(parsedTasks, true)
       options.syncRealtimeLoadedTarget(session)
+      realtimeParseFailed.value = false
       realtimeParseRetryCount = 0
     } catch (error) {
+      realtimeParseFailed.value = true
       console.warn('[realtime] parse failed:', error)
       if (
         options.realtimeSession.value === session &&
@@ -86,12 +89,14 @@ export const createRealtimeParseScheduler = (
   const resetParseState = () => {
     realtimeReparseRequested.value = false
     realtimeParsing.value = false
+    realtimeParseFailed.value = false
     realtimeParseRetryCount = 0
   }
 
   return {
     realtimeParsing,
     realtimeReparseRequested,
+    realtimeParseFailed,
     runRealtimeParse,
     scheduleRealtimeParse,
     clearRealtimeParseTimer,

@@ -36,6 +36,7 @@ export interface ProcessViewForwardProps {
   pendingScrollNodeId?: number | null
   followLast?: boolean
   isRealtimeStreaming?: boolean
+  realtimeParseFailed?: boolean
   showRealtimeStatus?: boolean
   showReloadControls?: boolean
   isVscodeLaunchEmbed?: boolean
