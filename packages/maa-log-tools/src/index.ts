@@ -14,6 +14,7 @@ import {
   extractZipContentFromNodeBuffer,
   extractZipContentFromNodeFile,
   loadNodeLogDirectory,
+  type ArchiveLimits,
   type LogBundleFocus,
 } from './nodeInput'
 
@@ -23,6 +24,7 @@ export interface AnalyzeZipBufferInput {
   zipData: Uint8Array
   sourceRef?: string
   focus?: LogBundleFocus
+  archiveLimits?: Partial<ArchiveLimits>
   parseOptions?: ParseOptions
   parserVersion?: string
 }
@@ -30,6 +32,7 @@ export interface AnalyzeZipBufferInput {
 export interface AnalyzeZipFileInput {
   zipFilePath: string
   focus?: LogBundleFocus
+  archiveLimits?: Partial<ArchiveLimits>
   parseOptions?: ParseOptions
   parserVersion?: string
 }
@@ -37,6 +40,7 @@ export interface AnalyzeZipFileInput {
 export interface AnalyzeDirectoryInput {
   directoryPath: string
   focus?: LogBundleFocus
+  archiveLimits?: Partial<ArchiveLimits>
   parseOptions?: ParseOptions
   parserVersion?: string
 }
@@ -55,6 +59,7 @@ export const analyzeZipBuffer = async (
 ): Promise<KernelOutput | null> => {
   const extracted = extractZipContentFromNodeBuffer(input.zipData, input.sourceRef, {
     focus: input.focus,
+    archiveLimits: input.archiveLimits,
   })
   if (!extracted) return null
 
@@ -73,6 +78,7 @@ export const analyzeZipFile = async (
 ): Promise<KernelOutput | null> => {
   const extracted = await extractZipContentFromNodeFile(input.zipFilePath, {
     focus: input.focus,
+    archiveLimits: input.archiveLimits,
   })
   if (!extracted) return null
 
@@ -91,6 +97,7 @@ export const analyzeDirectory = async (
 ): Promise<KernelOutput | null> => {
   const extracted = await loadNodeLogDirectory(input.directoryPath, {
     focus: input.focus,
+    archiveLimits: input.archiveLimits,
   })
   if (!extracted) return null
 

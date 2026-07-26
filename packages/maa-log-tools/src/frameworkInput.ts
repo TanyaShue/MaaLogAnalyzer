@@ -1,11 +1,28 @@
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { lstat } from 'node:fs/promises'
 import path from 'node:path'
-import { unzipSync } from 'fflate'
 import type { FrameworkLogSource } from './frameworkVersion'
-import { readNodeTextFileContent } from './nodeInput'
+import {
+  extractInspectedZipEntriesWithinLimits,
+  inspectZipDirectory,
+  resolveArchiveLimits,
+  type ArchiveLimits,
+} from './archiveLimits'
+import {
+  createNodeInputBudgetContext,
+  findExistingRegularNodeFile,
+  InputFileError,
+  readNodeArchiveFileBytes,
+  readNodeTextFileContent,
+  readNodeTextFilesContent,
+  resolveNodeDebugDirectory,
+} from './nodeInput'
 
 const MAIN_LOG_NAMES = ['maafw.log', 'maa.log'] as const
 const BAK_LOG_NAMES = ['maafw.bak.log', 'maa.bak.log'] as const
+
+export interface LoadFrameworkLogSourcesOptions {
+  archiveLimits?: Partial<ArchiveLimits>
+}
 
 const toPosixPath = (value: string): string => value.replace(/\\/g, '/')
 
@@ -36,9 +53,13 @@ const findZipBasePath = (paths: string[]): string | null => {
   return null
 }
 
-const loadZipSources = async (zipPath: string): Promise<FrameworkLogSource[]> => {
-  const files = unzipSync(new Uint8Array(await readFile(zipPath)))
-  const paths = Object.keys(files)
+const loadZipSources = async (
+  zipPath: string,
+  limits: Readonly<ArchiveLimits>,
+): Promise<FrameworkLogSource[]> => {
+  const bytes = await readNodeArchiveFileBytes(zipPath, limits)
+  const entries = inspectZipDirectory(bytes, limits)
+  const paths = entries.map((entry) => entry.name)
   const basePath = findZipBasePath(paths)
   if (basePath == null) return []
 
@@ -48,6 +69,14 @@ const loadZipSources = async (zipPath: string): Promise<FrameworkLogSource[]> =>
     if (candidate && !selected.includes(candidate)) selected.push(candidate)
     if (candidate && MAIN_LOG_NAMES.includes(name as (typeof MAIN_LOG_NAMES)[number])) break
   }
+
+  const selectedPaths = new Set(selected)
+  const { files } = extractInspectedZipEntriesWithinLimits(
+    bytes,
+    entries,
+    (entryPath) => selectedPaths.has(entryPath),
+    limits,
+  )
 
   return selected.flatMap((entryPath) => {
     const bytes = files[entryPath]
@@ -62,65 +91,48 @@ const loadZipSources = async (zipPath: string): Promise<FrameworkLogSource[]> =>
   })
 }
 
-const pathExists = async (candidate: string): Promise<boolean> => {
-  try {
-    await stat(candidate)
-    return true
-  } catch {
-    return false
-  }
-}
-
-const findDebugDirectory = async (root: string): Promise<string | null> => {
-  for (const name of MAIN_LOG_NAMES) {
-    if (await pathExists(path.join(root, name))) return root
-  }
-  const directDebug = path.join(root, 'debug')
-  for (const name of MAIN_LOG_NAMES) {
-    if (await pathExists(path.join(directDebug, name))) return directDebug
-  }
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const found = await findDebugDirectory(path.join(root, entry.name))
-    if (found) return found
-  }
-  return null
-}
-
-const firstExisting = async (root: string, names: readonly string[]): Promise<string | null> => {
-  for (const name of names) {
-    const candidate = path.join(root, name)
-    if (await pathExists(candidate)) return candidate
-  }
-  return null
-}
-
-const loadDirectorySources = async (directoryPath: string): Promise<FrameworkLogSource[]> => {
-  const debugPath = await findDebugDirectory(directoryPath)
+const loadDirectorySources = async (
+  directoryPath: string,
+  limits: Readonly<ArchiveLimits>,
+): Promise<FrameworkLogSource[]> => {
+  const context = await createNodeInputBudgetContext(directoryPath, limits)
+  const debugPath = await resolveNodeDebugDirectory(directoryPath, context)
   if (!debugPath) return []
   const selected = [
-    await firstExisting(debugPath, BAK_LOG_NAMES),
-    await firstExisting(debugPath, MAIN_LOG_NAMES),
+    await findExistingRegularNodeFile(context, debugPath, BAK_LOG_NAMES),
+    await findExistingRegularNodeFile(context, debugPath, MAIN_LOG_NAMES),
   ].filter((candidate): candidate is string => candidate != null)
 
-  return Promise.all(selected.map(async (absolutePath) => ({
+  const contents = await readNodeTextFilesContent(selected, {
+    archiveLimits: limits,
+    budgetContext: context,
+  })
+  return selected.map((absolutePath, index) => ({
     path: toPosixPath(path.relative(debugPath, absolutePath)),
     name: path.basename(absolutePath),
-    content: await readNodeTextFileContent(absolutePath),
+    content: contents[index] ?? '',
     reference: `file:${toPosixPath(absolutePath)}`,
-  })))
+  }))
 }
 
 export const loadFrameworkLogSources = async (
   targetPath: string,
+  options: LoadFrameworkLogSourcesOptions = {},
 ): Promise<FrameworkLogSource[]> => {
-  const targetStat = await stat(targetPath)
-  if (targetStat.isDirectory()) return loadDirectorySources(targetPath)
-  if (targetPath.toLowerCase().endsWith('.zip')) return loadZipSources(targetPath)
+  const limits = resolveArchiveLimits(options.archiveLimits)
+  const targetStat = await lstat(targetPath)
+  if (targetStat.isSymbolicLink()) {
+    throw new InputFileError('symlink', targetPath, `Symbolic-link inputs are not allowed: ${targetPath}`)
+  }
+  if (targetStat.isDirectory()) return loadDirectorySources(targetPath, limits)
+  if (!targetStat.isFile()) {
+    throw new InputFileError('not-regular-file', targetPath, `Expected a regular file: ${targetPath}`)
+  }
+  if (targetPath.toLowerCase().endsWith('.zip')) return loadZipSources(targetPath, limits)
   return [{
     path: toPosixPath(targetPath),
     name: path.basename(targetPath),
-    content: await readNodeTextFileContent(targetPath),
+    content: await readNodeTextFileContent(targetPath, { archiveLimits: limits }),
     reference: `file:${toPosixPath(targetPath)}`,
   }]
 }

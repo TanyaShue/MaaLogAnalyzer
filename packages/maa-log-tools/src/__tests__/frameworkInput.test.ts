@@ -58,4 +58,52 @@ describe('loadFrameworkLogSources', () => {
     })
     expect(sources[0]?.reference).toMatch(/^file:/)
   })
+
+  it('enforces archive compression-ratio limits before loading framework logs', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-framework-input-'))
+    tempRoots.push(root)
+    const zipPath = path.join(root, 'logs.zip')
+    await writeFile(zipPath, zipSync({
+      'debug/maafw.log': new Uint8Array(2_048),
+    }, { level: 9 }))
+
+    await expect(loadFrameworkLogSources(zipPath, {
+      archiveLimits: {
+        compressionRatioMinBytes: 1,
+        maxCompressionRatio: 2,
+      },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'compression-ratio',
+    })
+  })
+
+  it('does not expand framework logs outside the selected base directory', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-framework-input-'))
+    tempRoots.push(root)
+    const zipPath = path.join(root, 'logs.zip')
+    await writeFile(zipPath, zipSync({
+      'debug/maafw.log': strToU8(log('v5.11.1')),
+      'other/maa.log': new Uint8Array(1_024),
+    }))
+
+    const sources = await loadFrameworkLogSources(zipPath, {
+      archiveLimits: { maxFileBytes: 512, maxExtractedBytes: 512 },
+    })
+    expect(sources.map((source) => source.path)).toEqual(['debug/maafw.log'])
+  })
+
+  it('enforces standalone framework log file limits', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-framework-input-'))
+    tempRoots.push(root)
+    const logPath = path.join(root, 'maafw.log')
+    await writeFile(logPath, log('v5.11.1'))
+
+    await expect(loadFrameworkLogSources(logPath, {
+      archiveLimits: { maxFileBytes: 8 },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'file-size',
+    })
+  })
 })

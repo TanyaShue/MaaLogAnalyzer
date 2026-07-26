@@ -1,7 +1,37 @@
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { lstat, opendir, realpath } from 'node:fs/promises'
+import type { Stats } from 'node:fs'
 import path from 'node:path'
-import { unzipSync } from 'fflate'
 import type { SourceSegment } from './runtimeInspection'
+import {
+  addArchiveDirectoryEntry,
+  addSelectedEntry,
+  ArchiveLimitError,
+  assertArchiveInputsWithinLimits,
+  createStoredFileMetadata,
+  EMPTY_ARCHIVE_DIRECTORY_BUDGET,
+  EMPTY_EXTRACTION_BUDGET,
+  extractZipEntriesWithinLimits,
+  resolveArchiveLimits,
+  type ArchiveDirectoryBudget,
+  type ArchiveLimits,
+  type ExtractionBudget,
+} from './archiveLimits'
+import {
+  getFileIdentity,
+  InputFileError,
+  readBoundedRegularFile,
+  sameFileIdentity,
+  type FileIdentity,
+} from './boundedFileReader'
+
+export {
+  ArchiveFormatError,
+  ArchiveLimitError,
+  DEFAULT_ARCHIVE_LIMITS,
+  resolveArchiveLimits,
+} from './archiveLimits'
+export { InputFileError } from './boundedFileReader'
+export type { ArchiveFormatCode, ArchiveLimitCode, ArchiveLimits } from './archiveLimits'
 
 const MAIN_LOG_NAMES = ['maa.log', 'maafw.log'] as const
 const BAK_LOG_NAMES = ['maa.bak.log', 'maafw.bak.log'] as const
@@ -37,10 +67,17 @@ export interface LogBundleFocus {
 
 export interface ExtractZipContentOptions {
   focus?: LogBundleFocus
+  archiveLimits?: Partial<ArchiveLimits>
 }
 
 export interface LoadNodeLogDirectoryOptions {
   focus?: LogBundleFocus
+  archiveLimits?: Partial<ArchiveLimits>
+}
+
+export interface ReadNodeTextFileOptions {
+  archiveLimits?: Partial<ArchiveLimits>
+  budgetContext?: NodeInputBudgetContext
 }
 
 const toPosixPath = (value: string): string => value.replace(/\\/g, '/')
@@ -296,13 +333,151 @@ const sortLogPaths = (paths: string[]): string[] => {
   })
 }
 
+export interface NodeInputBudgetContext {
+  readonly limits: Readonly<ArchiveLimits>
+  readonly rootPath: string
+  readonly rootRealPath: string
+  directory: ArchiveDirectoryBudget
+  extraction: ExtractionBudget
+  readonly chargedPaths: Set<string>
+  readonly discoveredIdentities: Map<string, FileIdentity>
+}
+
+const pathKey = (value: string): string => {
+  const resolved = path.resolve(value)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+const isPathInside = (rootPath: string, candidatePath: string): boolean => {
+  const relativePath = path.relative(rootPath, candidatePath)
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
+}
+
+const assertPathInsideContext = async (
+  context: NodeInputBudgetContext,
+  fullPath: string,
+): Promise<void> => {
+  const absolutePath = path.resolve(fullPath)
+  if (!isPathInside(context.rootPath, absolutePath)) {
+    throw new InputFileError('path-escape', fullPath, `Input path escapes the selected root: ${fullPath}`)
+  }
+  const physicalPath = await realpath(absolutePath)
+  if (!isPathInside(context.rootRealPath, physicalPath)) {
+    throw new InputFileError('path-escape', fullPath, `Input path resolves outside the selected root: ${fullPath}`)
+  }
+}
+
+export const createNodeInputBudgetContext = async (
+  rootPath: string,
+  limits: Readonly<ArchiveLimits>,
+  requireDirectoryRoot: boolean = true,
+): Promise<NodeInputBudgetContext> => {
+  const absoluteRoot = path.resolve(rootPath)
+  const rootStats = await lstat(absoluteRoot)
+  if (rootStats.isSymbolicLink()) {
+    throw new InputFileError('symlink', absoluteRoot, `Symbolic-link roots are not allowed: ${absoluteRoot}`)
+  }
+  if (requireDirectoryRoot && !rootStats.isDirectory()) {
+    throw new InputFileError('not-directory', absoluteRoot, `Expected a directory root: ${absoluteRoot}`)
+  }
+  const physicalRoot = await realpath(absoluteRoot)
+  return {
+    limits,
+    rootPath: absoluteRoot,
+    rootRealPath: physicalRoot,
+    directory: EMPTY_ARCHIVE_DIRECTORY_BUDGET,
+    extraction: EMPTY_EXTRACTION_BUDGET,
+    chargedPaths: new Set<string>(),
+    discoveredIdentities: new Map<string, FileIdentity>(),
+  }
+}
+
+const chargePath = (
+  context: NodeInputBudgetContext,
+  fullPath: string,
+): void => {
+  const key = pathKey(fullPath)
+  if (context.chargedPaths.has(key)) return
+  const relativePath = toPosixPath(path.relative(context.rootPath, path.resolve(fullPath)))
+  context.directory = addArchiveDirectoryEntry(context.directory, {
+    name: relativePath,
+    size: 0,
+    originalSize: 0,
+    compression: 0,
+  }, context.limits)
+  context.chargedPaths.add(key)
+}
+
+const recordDiscoveredIdentity = (
+  context: NodeInputBudgetContext,
+  fullPath: string,
+  stats: Stats,
+): void => {
+  const key = pathKey(fullPath)
+  const identity = getFileIdentity(stats)
+  const previous = context.discoveredIdentities.get(key)
+  if (previous && !sameFileIdentity(previous, identity)) {
+    throw new InputFileError(
+      'identity-changed',
+      fullPath,
+      `Input identity changed during directory analysis: ${fullPath}`,
+    )
+  }
+  context.discoveredIdentities.set(key, identity)
+}
+
+const inspectDirectoryEntry = async (
+  context: NodeInputBudgetContext,
+  fullPath: string,
+): Promise<Stats> => {
+  const stats = await lstat(fullPath)
+  chargePath(context, fullPath)
+  if (stats.isSymbolicLink()) {
+    throw new InputFileError('symlink', fullPath, `Symbolic-link entries are not allowed: ${fullPath}`)
+  }
+  await assertPathInsideContext(context, fullPath)
+  recordDiscoveredIdentity(context, fullPath, stats)
+  return stats
+}
+
+const readNodeTextFileWithinBudget = async (
+  filePath: string,
+  context: NodeInputBudgetContext,
+): Promise<string> => {
+  chargePath(context, filePath)
+  await assertPathInsideContext(context, filePath)
+  const remainingBytes = context.limits.maxExtractedBytes - context.extraction.extractedBytes
+  const maxBytes = Math.min(context.limits.maxFileBytes, remainingBytes)
+  const limitCode = context.limits.maxFileBytes <= remainingBytes ? 'file-size' : 'extracted-size'
+  const bytes = await readBoundedRegularFile(
+    filePath,
+    maxBytes,
+    (actualBytes) => new ArchiveLimitError(
+      limitCode,
+      limitCode === 'extracted-size'
+        ? context.extraction.extractedBytes + actualBytes
+        : actualBytes,
+      limitCode === 'extracted-size' ? context.limits.maxExtractedBytes : context.limits.maxFileBytes,
+    ),
+    { expectedIdentity: context.discoveredIdentities.get(pathKey(filePath)) },
+  )
+  context.extraction = addSelectedEntry(
+    context.extraction,
+    createStoredFileMetadata(toPosixPath(filePath), bytes.byteLength),
+    context.limits,
+    false,
+  )
+  return decodeNodeBytes(bytes)
+}
+
 const collectFocusedFileContents = async (
   logPaths: string[],
   focus: LogBundleFocus,
+  context: NodeInputBudgetContext,
 ): Promise<MergedContent> => {
   const chunks: TaggedChunk[] = []
   for (const logPath of sortLogPaths(logPaths)) {
-    const content = await readNodeTextFileContent(logPath)
+    const content = await readNodeTextFileWithinBudget(logPath, context)
     if (!contentMatchesFocus(content, focus)) continue
     chunks.push({
       content,
@@ -380,9 +555,32 @@ const buildDefaultZipContent = (
   return joinMergedWithSources(chunks)
 }
 
-export const readNodeTextFileContent = async (filePath: string): Promise<string> => {
-  const bytes = await readFile(filePath)
-  return decodeNodeBytes(new Uint8Array(bytes))
+export const readNodeTextFileContent = async (
+  filePath: string,
+  options: ReadNodeTextFileOptions = {},
+): Promise<string> => {
+  const limits = resolveArchiveLimits(options.archiveLimits)
+  const context = options.budgetContext ?? await createNodeInputBudgetContext(
+    path.dirname(path.resolve(filePath)),
+    limits,
+  )
+  return readNodeTextFileWithinBudget(filePath, context)
+}
+
+export const readNodeTextFilesContent = async (
+  filePaths: readonly string[],
+  options: ReadNodeTextFileOptions = {},
+): Promise<string[]> => {
+  const limits = resolveArchiveLimits(options.archiveLimits)
+  const commonRoot = filePaths.length > 0
+    ? path.dirname(path.resolve(filePaths[0]))
+    : process.cwd()
+  const context = options.budgetContext ?? await createNodeInputBudgetContext(commonRoot, limits)
+  const contents: string[] = []
+  for (const filePath of filePaths) {
+    contents.push(await readNodeTextFileWithinBudget(filePath, context))
+  }
+  return contents
 }
 
 export const extractZipContentFromNodeBuffer = (
@@ -390,9 +588,8 @@ export const extractZipContentFromNodeBuffer = (
   sourceRef: string = 'memory.zip',
   options: ExtractZipContentOptions = {},
 ): NodeExtractedLogContent | null => {
-  const files = unzipSync(zipData, {
-    filter: (entry) => isNeededZipEntry(entry.name),
-  })
+  const limits = resolveArchiveLimits(options.archiveLimits)
+  const { files } = extractZipEntriesWithinLimits(zipData, isNeededZipEntry, limits)
   const paths = Object.keys(files)
   const basePath = findBaseDirectory(paths)
   if (basePath == null) return null
@@ -454,66 +651,189 @@ export const extractZipContentFromNodeFile = async (
   zipFilePath: string,
   options: ExtractZipContentOptions = {},
 ): Promise<NodeExtractedLogContent | null> => {
-  const bytes = await readFile(zipFilePath)
-  return extractZipContentFromNodeBuffer(new Uint8Array(bytes), zipFilePath, options)
+  const limits = resolveArchiveLimits(options.archiveLimits)
+  const bytes = await readNodeArchiveFileBytes(zipFilePath, limits)
+  return extractZipContentFromNodeBuffer(bytes, zipFilePath, {
+    ...options,
+    archiveLimits: limits,
+  })
 }
 
-const pathExists = async (targetPath: string): Promise<boolean> => {
-  try {
-    await stat(targetPath)
-    return true
-  } catch {
-    return false
+export const readNodeArchiveFileBytes = async (
+  zipFilePath: string,
+  limits: Readonly<ArchiveLimits>,
+): Promise<Uint8Array> => {
+  assertArchiveInputsWithinLimits([{ size: 0 }], limits)
+  const context = await createNodeInputBudgetContext(path.dirname(path.resolve(zipFilePath)), limits)
+  chargePath(context, zipFilePath)
+  await assertPathInsideContext(context, zipFilePath)
+  const bytes = await readBoundedRegularFile(
+    zipFilePath,
+    limits.maxCompressedBytes,
+    (actualBytes) => new ArchiveLimitError('compressed-size', actualBytes, limits.maxCompressedBytes),
+  )
+  assertArchiveInputsWithinLimits([{ size: bytes.byteLength }], limits)
+  return bytes
+}
+
+const assertDirectoryIdentity = (
+  directoryPath: string,
+  expected: Readonly<FileIdentity>,
+  stats: Stats,
+): void => {
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new InputFileError('not-directory', directoryPath, `Expected a stable directory: ${directoryPath}`)
+  }
+  if (!sameFileIdentity(expected, getFileIdentity(stats))) {
+    throw new InputFileError(
+      'identity-changed',
+      directoryPath,
+      `Directory identity changed during traversal: ${directoryPath}`,
+    )
   }
 }
 
-const hasMainLogInDirectory = async (dirPath: string): Promise<boolean> => {
+const inspectDirectory = async (
+  context: NodeInputBudgetContext,
+  directoryPath: string,
+): Promise<Stats> => {
+  if (pathKey(directoryPath) !== pathKey(context.rootPath)) chargePath(context, directoryPath)
+  const stats = await lstat(directoryPath)
+  if (stats.isSymbolicLink()) {
+    throw new InputFileError('symlink', directoryPath, `Symbolic-link directories are not allowed: ${directoryPath}`)
+  }
+  if (!stats.isDirectory()) {
+    throw new InputFileError('not-directory', directoryPath, `Expected a directory: ${directoryPath}`)
+  }
+  await assertPathInsideContext(context, directoryPath)
+  recordDiscoveredIdentity(context, directoryPath, stats)
+  return stats
+}
+
+const withSafeDirectory = async <T>(
+  context: NodeInputBudgetContext,
+  directoryPath: string,
+  consume: (directory: Awaited<ReturnType<typeof opendir>>) => Promise<T>,
+): Promise<T> => {
+  const beforeOpen = await inspectDirectory(context, directoryPath)
+  const expectedIdentity = getFileIdentity(beforeOpen)
+  const directory = await opendir(directoryPath)
+  const afterOpen = await lstat(directoryPath)
+  assertDirectoryIdentity(directoryPath, expectedIdentity, afterOpen)
+  try {
+    return await consume(directory)
+  } finally {
+    await directory.close().catch(() => undefined)
+    const afterRead = await lstat(directoryPath)
+    assertDirectoryIdentity(directoryPath, expectedIdentity, afterRead)
+  }
+}
+
+const tryInspectDirectory = async (
+  context: NodeInputBudgetContext,
+  directoryPath: string,
+): Promise<boolean> => {
+  try {
+    await inspectDirectory(context, directoryPath)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+export const hasNodeMainLogInDirectory = async (
+  context: NodeInputBudgetContext,
+  directoryPath: string,
+): Promise<boolean> => {
+  if (!await tryInspectDirectory(context, directoryPath)) return false
   for (const name of MAIN_LOG_NAMES) {
-    if (await pathExists(path.join(dirPath, name))) {
-      return true
+    const candidatePath = path.join(directoryPath, name)
+    try {
+      const stats = await inspectDirectoryEntry(context, candidatePath)
+      if (stats.isFile()) return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
     }
   }
   return false
 }
 
-const findDebugDirectoryRecursively = async (rootPath: string): Promise<string | null> => {
-  const entries = await readdir(rootPath, { withFileTypes: true })
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const subDirPath = path.join(rootPath, entry.name)
-    if (await hasMainLogInDirectory(subDirPath)) {
-      return subDirPath
+export const findExistingRegularNodeFile = async (
+  context: NodeInputBudgetContext,
+  directoryPath: string,
+  names: readonly string[],
+): Promise<string | null> => {
+  for (const name of names) {
+    const candidatePath = path.join(directoryPath, name)
+    try {
+      const stats = await inspectDirectoryEntry(context, candidatePath)
+      if (stats.isFile()) return candidatePath
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
     }
-    const nested = await findDebugDirectoryRecursively(subDirPath)
-    if (nested) return nested
   }
   return null
 }
 
-const resolveDebugDirectory = async (inputPath: string): Promise<string | null> => {
-  if (await hasMainLogInDirectory(inputPath)) {
-    return inputPath
+const findDebugDirectoryRecursively = async (
+  rootPath: string,
+  context: NodeInputBudgetContext,
+): Promise<string | null> => {
+  const pending = [rootPath]
+  while (pending.length > 0) {
+    const currentPath = pending.pop()
+    if (!currentPath) break
+    const found = await withSafeDirectory(context, currentPath, async (directory) => {
+      for await (const entry of directory) {
+        const fullPath = path.join(currentPath, entry.name)
+        const stats = await inspectDirectoryEntry(context, fullPath)
+        if (!stats.isDirectory()) continue
+        if (await hasNodeMainLogInDirectory(context, fullPath)) return fullPath
+        pending.push(fullPath)
+      }
+      return null
+    })
+    if (found) return found
   }
-
-  const directDebugPath = path.join(inputPath, 'debug')
-  if (await hasMainLogInDirectory(directDebugPath)) {
-    return directDebugPath
-  }
-
-  return findDebugDirectoryRecursively(inputPath)
+  return null
 }
 
-const collectFilesRecursively = async (rootPath: string): Promise<string[]> => {
+export const resolveNodeDebugDirectory = async (
+  inputPath: string,
+  context: NodeInputBudgetContext,
+): Promise<string | null> => {
+  if (await hasNodeMainLogInDirectory(context, inputPath)) return inputPath
+
+  const directDebugPath = path.join(inputPath, 'debug')
+  if (await hasNodeMainLogInDirectory(context, directDebugPath)) return directDebugPath
+
+  return findDebugDirectoryRecursively(inputPath, context)
+}
+
+const collectFilesRecursively = async (
+  rootPath: string,
+  context: NodeInputBudgetContext,
+): Promise<string[]> => {
   const collected: string[] = []
-  const entries = await readdir(rootPath, { withFileTypes: true })
-  for (const entry of entries) {
-    const fullPath = path.join(rootPath, entry.name)
-    if (entry.isDirectory()) {
-      const nested = await collectFilesRecursively(fullPath)
-      collected.push(...nested)
-      continue
-    }
-    collected.push(fullPath)
+  const pending = [rootPath]
+
+  while (pending.length > 0) {
+    const currentPath = pending.pop()
+    if (!currentPath) break
+    await withSafeDirectory(context, currentPath, async (directory) => {
+      for await (const entry of directory) {
+        const fullPath = path.join(currentPath, entry.name)
+        const stats = await inspectDirectoryEntry(context, fullPath)
+        if (stats.isDirectory()) {
+          pending.push(fullPath)
+        } else if (stats.isFile()) {
+          collected.push(fullPath)
+        }
+      }
+    })
   }
   return collected
 }
@@ -525,9 +845,8 @@ const pickPrimaryLogPath = async (
 ): Promise<string | null> => {
   for (const name of candidates) {
     const directPath = path.join(debugPath, name)
-    if (await pathExists(directPath)) {
-      return directPath
-    }
+    const directMatch = allFiles.find((filePath) => pathKey(filePath) === pathKey(directPath))
+    if (directMatch) return directMatch
   }
 
   const normalizedCandidates = new Set(candidates.map((name) => name.toLowerCase()))
@@ -543,6 +862,7 @@ const pickPrimaryLogPath = async (
 const buildDefaultDirectoryContent = async (
   debugPath: string,
   allFiles: string[],
+  context: NodeInputBudgetContext,
 ): Promise<MergedContent> => {
   const bakLogPath = await pickPrimaryLogPath(debugPath, allFiles, BAK_LOG_NAMES)
   const mainLogPath = await pickPrimaryLogPath(debugPath, allFiles, MAIN_LOG_NAMES)
@@ -550,14 +870,14 @@ const buildDefaultDirectoryContent = async (
   const chunks: TaggedChunk[] = []
   if (bakLogPath) {
     chunks.push({
-      content: await readNodeTextFileContent(bakLogPath),
+      content: await readNodeTextFileWithinBudget(bakLogPath, context),
       source: toFileReference(bakLogPath),
       path: toPosixPath(path.relative(debugPath, bakLogPath)),
     })
   }
   if (mainLogPath) {
     chunks.push({
-      content: await readNodeTextFileContent(mainLogPath),
+      content: await readNodeTextFileWithinBudget(mainLogPath, context),
       source: toFileReference(mainLogPath),
       path: toPosixPath(path.relative(debugPath, mainLogPath)),
     })
@@ -569,13 +889,19 @@ export const loadNodeLogDirectory = async (
   inputDirectoryPath: string,
   options: LoadNodeLogDirectoryOptions = {},
 ): Promise<NodeExtractedLogContent | null> => {
-  const debugPath = await resolveDebugDirectory(inputDirectoryPath)
+  const limits = resolveArchiveLimits(options.archiveLimits)
+  const context = await createNodeInputBudgetContext(inputDirectoryPath, limits)
+  const debugPath = await resolveNodeDebugDirectory(inputDirectoryPath, context)
   if (!debugPath) return null
 
-  const allFiles = await collectFilesRecursively(debugPath)
+  const allFiles = await collectFilesRecursively(debugPath, context)
   const merged = options.focus
-    ? await collectFocusedFileContents(allFiles.filter((filePath) => isCoreLogName(path.basename(filePath))), options.focus)
-    : await buildDefaultDirectoryContent(debugPath, allFiles)
+    ? await collectFocusedFileContents(
+        allFiles.filter((filePath) => isCoreLogName(path.basename(filePath))),
+        options.focus,
+        context,
+      )
+    : await buildDefaultDirectoryContent(debugPath, allFiles, context)
   if (!merged.content) return null
 
   const errorImages = new Map<string, string>()
@@ -612,7 +938,7 @@ export const loadNodeLogDirectory = async (
     textFiles.push({
       path: relativePath,
       name: fileName,
-      content: await readNodeTextFileContent(absolutePath),
+      content: await readNodeTextFileWithinBudget(absolutePath, context),
       reference: toFileReference(absolutePath),
     })
   }

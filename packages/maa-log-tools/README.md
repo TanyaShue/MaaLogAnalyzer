@@ -47,6 +47,18 @@ The concrete adapter is provided by `@windsland52/maa-log-adapter`.
 
 When `focus` is provided, the helpers scan candidate primary and history log files and only merge files whose content matches the keywords and/or timestamp boundaries. If `focus` is omitted, the previous default loading behavior is preserved.
 
+## Input resource limits
+
+ZIP, file, and directory helpers apply the repository archive limits by default. ZIP inputs are
+checked for compressed size, entry/path metadata, selected file/image sizes, total extracted size,
+and compression ratio before selected entries are expanded. Regular files are checked with
+filesystem metadata before reading and again using the returned byte length; directory walks and
+cumulative text reads are bounded as well.
+
+Programmatic callers can tighten a subset of these limits with `archiveLimits` on the analyze and
+input-helper options. The defaults are exported as `DEFAULT_ARCHIVE_LIMITS`; limit failures throw
+`ArchiveLimitError` with a stable `code` such as `compressed-size` or `compression-ratio`.
+
 ## CLI
 
 ```bash

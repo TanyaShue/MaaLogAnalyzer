@@ -1,9 +1,14 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { strToU8, zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
-import { extractZipContentFromNodeBuffer, loadNodeLogDirectory } from '../nodeInput'
+import {
+  ArchiveLimitError,
+  extractZipContentFromNodeBuffer,
+  loadNodeLogDirectory,
+  readNodeTextFileContent,
+} from '../nodeInput'
 
 const tempRoots: string[] = []
 
@@ -126,5 +131,114 @@ describe('node input focus selectors', () => {
         lineCount: 2,
       },
     ])
+  })
+
+  it('applies ZIP limits before expanding selected log content', () => {
+    const zipData = zipSync({
+      'maa.log': new Uint8Array(2_048),
+    }, { level: 9 })
+
+    expect(() => extractZipContentFromNodeBuffer(zipData, 'logs.zip', {
+      archiveLimits: {
+        compressionRatioMinBytes: 1,
+        maxCompressionRatio: 2,
+      },
+    })).toThrow(expect.objectContaining<Partial<ArchiveLimitError>>({
+      name: 'ArchiveLimitError',
+      code: 'compression-ratio',
+    }))
+  })
+
+  it('checks regular log file size before and after reading', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-node-input-'))
+    tempRoots.push(root)
+    const logPath = path.join(root, 'maa.log')
+    await writeFile(logPath, '0123456789')
+
+    await expect(readNodeTextFileContent(logPath, {
+      archiveLimits: { maxFileBytes: 5 },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'file-size',
+    })
+  })
+
+  it('bounds cumulative directory text reads and directory entry counts', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-node-input-'))
+    tempRoots.push(root)
+    const debugDir = path.join(root, 'debug')
+    await mkdir(debugDir, { recursive: true })
+    await writeFile(path.join(debugDir, 'maa.log'), 'main\n')
+    await writeFile(path.join(debugDir, 'notes.txt'), '0123456789')
+
+    await expect(loadNodeLogDirectory(root, {
+      archiveLimits: { maxFileBytes: 20, maxExtractedBytes: 10 },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'extracted-size',
+    })
+
+    await expect(loadNodeLogDirectory(root, {
+      archiveLimits: { maxEntries: 1 },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'entry-count',
+    })
+  })
+
+  it('shares entry budgets across debug discovery, collection, and reads', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-node-input-'))
+    tempRoots.push(root)
+    const debugDir = path.join(root, 'container', 'debug')
+    await mkdir(debugDir, { recursive: true })
+    await writeFile(path.join(debugDir, 'maa.log'), 'main\n')
+    await writeFile(path.join(debugDir, 'notes.txt'), 'notes\n')
+
+    await expect(loadNodeLogDirectory(root, {
+      archiveLimits: { maxEntries: 3 },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'entry-count',
+    })
+  })
+
+  it('charges case-distinct paths separately on case-sensitive filesystems', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-node-input-'))
+    tempRoots.push(root)
+    const debugDir = path.join(root, 'debug')
+    const lowerPath = path.join(debugDir, 'maa.log')
+    const upperPath = path.join(debugDir, 'MAA.LOG')
+    await mkdir(debugDir, { recursive: true })
+    await writeFile(lowerPath, 'main\n')
+    await writeFile(upperPath, 'other\n')
+
+    const lowerStats = await lstat(lowerPath)
+    const upperStats = await lstat(upperPath)
+    if (lowerStats.dev === upperStats.dev && lowerStats.ino === upperStats.ino) return
+
+    await expect(loadNodeLogDirectory(root, {
+      archiveLimits: { maxEntries: 2 },
+    })).rejects.toMatchObject({
+      name: 'ArchiveLimitError',
+      code: 'entry-count',
+    })
+  })
+
+  it('rejects directory symlinks instead of following them outside the selected root', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'mla-node-input-'))
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'mla-node-outside-'))
+    tempRoots.push(root, outside)
+    await writeFile(path.join(outside, 'maa.log'), 'outside\n')
+    try {
+      await symlink(outside, path.join(root, 'debug'), 'junction')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return
+      throw error
+    }
+
+    await expect(loadNodeLogDirectory(root)).rejects.toMatchObject({
+      name: 'InputFileError',
+      code: 'symlink',
+    })
   })
 })
