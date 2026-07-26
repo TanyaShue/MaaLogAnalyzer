@@ -32,6 +32,7 @@ import {
   setRawLineSource,
   type RawLineStore,
 } from '../raw/store'
+import { cloneSnapshotData, freezeSnapshotData } from './snapshotIsolation'
 
 export interface ParseProgress {
   current: number
@@ -536,6 +537,7 @@ export class LogParser {
       visionImages: this.visionImages,
       waitFreezesImages: this.waitFreezesImages,
     })
+    for (const task of tasks) freezeSnapshotData(task)
 
     if (consume) {
       this.clearConsumedParseState()
@@ -555,11 +557,11 @@ export class LogParser {
   }
 
   getEventsSnapshot(): EventNotification[] {
-    return this.events.slice()
+    return cloneSnapshotData(this.events)
   }
 
   getProtocolEventsSnapshot(): ProtocolEvent[] {
-    return this.protocolEvents.slice()
+    return cloneSnapshotData(this.protocolEvents)
   }
 
   getRawLineStoreSnapshot(): RawLineStore | null {
@@ -567,11 +569,13 @@ export class LogParser {
   }
 
   getTraceSnapshot(): ScopeNode<TraceScopePayload | Record<string, never>> {
-    return buildTraceTree(this.protocolEvents)
+    return buildTraceTree(this.getProtocolEventsSnapshot())
   }
 
   getTraceIndexSnapshot(): TraceIndex {
-    return buildTraceIndex(this.getTraceSnapshot(), this.protocolEvents)
+    const events = this.getProtocolEventsSnapshot()
+    const trace = buildTraceTree(events)
+    return buildTraceIndex(trace, events)
   }
 
   getParseArtifactsSnapshot(): ParseArtifactsSnapshot {
@@ -600,6 +604,6 @@ export class LogParser {
    * 获取所有事件
    */
   getEvents(): EventNotification[] {
-    return this.events
+    return this.getEventsSnapshot()
   }
 }
