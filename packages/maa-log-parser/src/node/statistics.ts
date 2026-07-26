@@ -1,4 +1,5 @@
 import type { TaskInfo } from '../shared/types'
+import { toTimestampMs } from '../shared/timestamp'
 import { buildNodeRecognitionAttempts } from './flow'
 
 export interface NodeStatistics {
@@ -35,22 +36,25 @@ export interface RecognitionActionStatistics {
 }
 
 export const summarizeDurations = (durations: number[]) => {
-  if (durations.length === 0) {
-    return { total: 0, average: 0, min: 0, max: 0 }
-  }
-
   let total = 0
   let min = Number.POSITIVE_INFINITY
   let max = Number.NEGATIVE_INFINITY
+  let count = 0
   for (const duration of durations) {
+    if (!Number.isFinite(duration)) continue
     total += duration
+    count += 1
     if (duration < min) min = duration
     if (duration > max) max = duration
   }
 
+  if (count === 0) {
+    return { total: 0, average: 0, min: 0, max: 0 }
+  }
+
   return {
     total,
-    average: total / durations.length,
+    average: total / count,
     min,
     max,
   }
@@ -72,19 +76,18 @@ export class NodeStatisticsAnalyzer {
         const nextNode = nodes[i + 1]
 
         let duration = 0
-        if (nextNode) {
-          const currentTime = new Date(node.ts).getTime()
-          const nextTime = new Date(nextNode.ts).getTime()
-          duration = nextTime - currentTime
+        const currentTime = toTimestampMs(node.ts)
+        if (node.end_ts) {
+          duration = toTimestampMs(node.end_ts) - currentTime
+        } else if (nextNode) {
+          duration = toTimestampMs(nextNode.ts) - currentTime
         } else if (task.end_time) {
-          const currentTime = new Date(node.ts).getTime()
-          const endTime = new Date(task.end_time).getTime()
-          duration = endTime - currentTime
+          duration = toTimestampMs(task.end_time) - currentTime
         } else {
           continue
         }
 
-        if (duration < 0 || duration > 3600000) {
+        if (!Number.isFinite(duration) || duration < 0 || duration > 3600000) {
           continue
         }
         if (node.status === 'running') {
@@ -188,19 +191,19 @@ export class NodeStatisticsAnalyzer {
         stats.recognitionAttempts.push(attempts.length)
 
         if (attempts.length > 0) {
-          const firstAttemptTs = new Date(attempts[0].ts).getTime()
+          const firstAttemptTs = toTimestampMs(attempts[0].ts)
           const lastAttempt = attempts[attempts.length - 1]
-          const lastAttemptTime = new Date(lastAttempt.end_ts || lastAttempt.ts).getTime()
+          const lastAttemptTime = toTimestampMs(lastAttempt.end_ts || lastAttempt.ts)
           const recognitionDuration = lastAttemptTime - firstAttemptTs
 
-          if (recognitionDuration >= 0 && recognitionDuration < 3600000) {
+          if (Number.isFinite(recognitionDuration) && recognitionDuration >= 0 && recognitionDuration < 3600000) {
             stats.recognitionDurations.push(recognitionDuration)
           }
 
-          const nodeCompleteTime = new Date(node.end_ts || node.ts).getTime()
+          const nodeCompleteTime = toTimestampMs(node.end_ts || node.ts)
           const actionDuration = nodeCompleteTime - lastAttemptTime
 
-          if (actionDuration >= 0 && actionDuration < 3600000) {
+          if (Number.isFinite(actionDuration) && actionDuration >= 0 && actionDuration < 3600000) {
             stats.actionDurations.push(actionDuration)
           }
         }

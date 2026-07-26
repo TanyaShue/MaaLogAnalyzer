@@ -47,4 +47,69 @@ describe('NodeStatisticsAnalyzer', () => {
       max: 5,
     })
   })
+
+  it('ignores non-finite durations instead of emitting invalid statistics', () => {
+    expect(summarizeDurations([Number.NaN, Number.POSITIVE_INFINITY, 5])).toEqual({
+      total: 5,
+      average: 5,
+      min: 5,
+      max: 5,
+    })
+
+    const tasks: TaskInfo[] = [{
+      task_id: 2,
+      entry: 'InvalidTime',
+      hash: '',
+      uuid: '',
+      start_time: 'invalid',
+      end_time: 'invalid',
+      status: 'failed',
+      events: [],
+      nodes: [{
+        node_id: 2,
+        task_id: 2,
+        name: 'InvalidNode',
+        ts: 'invalid',
+        end_ts: 'invalid',
+        status: 'failed',
+        next_list: [],
+      }],
+    }]
+
+    expect(NodeStatisticsAnalyzer.analyze(tasks)).toEqual([])
+  })
+
+  it('uses a node end timestamp before the next node start', () => {
+    const tasks: TaskInfo[] = [{
+      task_id: 3,
+      entry: 'NodeDuration',
+      hash: '',
+      uuid: '',
+      start_time: '2026-01-01 00:00:00.000',
+      end_time: '2026-01-01 00:00:00.700',
+      status: 'succeeded',
+      events: [],
+      nodes: [{
+        node_id: 31,
+        task_id: 3,
+        name: 'FirstNode',
+        ts: '2026-01-01 00:00:00.000',
+        end_ts: '2026-01-01 00:00:00.100',
+        status: 'success',
+        next_list: [],
+      }, {
+        node_id: 32,
+        task_id: 3,
+        name: 'SecondNode',
+        ts: '2026-01-01 00:00:00.500',
+        end_ts: '2026-01-01 00:00:00.700',
+        status: 'success',
+        next_list: [],
+      }],
+    }]
+
+    const statistics = NodeStatisticsAnalyzer.analyze(tasks)
+    expect(statistics.find(item => item.name === 'FirstNode')?.avgDuration).toBe(100)
+    expect(statistics.find(item => item.name === 'SecondNode')?.avgDuration).toBe(200)
+  })
 })
