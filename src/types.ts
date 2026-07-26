@@ -9,6 +9,7 @@ export type {
   NodeInfo,
   RecognitionAttempt,
   RecognitionDetail,
+  ResourceLoadingDetail,
   TaskInfo,
   UnifiedFlowGroup,
   UnifiedFlowItem,
