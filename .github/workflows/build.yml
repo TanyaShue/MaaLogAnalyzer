@@ -13,6 +13,10 @@ jobs:
   # 构建 Windows 版本
   build-windows:
     runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
 
     steps:
       - name: 检出代码
@@ -44,8 +48,55 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 构建应用
+      - name: 导入 Windows 发布证书
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+            throw "Tagged releases require WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD, and WINDOWS_TIMESTAMP_URL secrets"
+          }
+          $certificateText = Join-Path $env:RUNNER_TEMP "windows-certificate.txt"
+          $certificatePath = Join-Path $env:RUNNER_TEMP "windows-certificate.pfx"
+          Set-Content -LiteralPath $certificateText -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode $certificateText $certificatePath
+          if ($LASTEXITCODE -ne 0) { throw "Failed to decode Windows certificate" }
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          if (!$certificate.Thumbprint) { throw "Imported Windows certificate has no thumbprint" }
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri-signing.json"
+          @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $certificate.Thumbprint
+                timestampUrl = $env:WINDOWS_TIMESTAMP_URL
+                digestAlgorithm = "sha256"
+              }
+            }
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding utf8
+          "TAURI_SIGNING_CONFIG=$configPath" >> $env:GITHUB_ENV
+
+      - name: 构建并签名应用
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm tauri build --config "$env:TAURI_SIGNING_CONFIG"
+
+      - name: 构建应用（手动未签名构建）
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: pnpm tauri build
+
+      - name: 验证 Windows 安装包签名
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse -Filter "*.msi" -File)
+          if ($installers.Count -eq 0) { throw "No MSI installer was produced" }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $($installer.FullName): $($signature.Status)"
+            }
+          }
 
       - name: 检查构建产物
         run: |
@@ -73,6 +124,13 @@ jobs:
             runner: macos-latest  # Apple Silicon macOS runner
       fail-fast: false
     runs-on: ${{ matrix.runner }}
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: 检出代码
@@ -104,8 +162,52 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 构建应用
+      - name: 导入 Apple Developer ID 证书
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "Tagged releases require the $name secret" >&2
+              exit 1
+            fi
+          done
+          certificate_path="$RUNNER_TEMP/apple-certificate.p12"
+          keychain_path="$RUNNER_TEMP/release-signing.keychain-db"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -t 3600 -u "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+          signing_identity=$(security find-identity -v -p codesigning "$keychain_path" | awk -F'"' '/Developer ID Application/ { print $2; exit }')
+          if [ -z "$signing_identity" ]; then
+            echo "No Developer ID Application identity was imported" >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+
+      - name: 构建、签名并公证应用
+        if: startsWith(github.ref, 'refs/tags/v')
         run: pnpm tauri build
+
+      - name: 构建应用（手动未签名构建）
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm tauri build
+
+      - name: 验证 macOS 签名和公证票据
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          apps=(src-tauri/target/release/bundle/macos/*.app)
+          dmgs=(src-tauri/target/release/bundle/dmg/*.dmg)
+          [ -e "${apps[0]}" ] || { echo "No macOS app bundle was produced" >&2; exit 1; }
+          [ -e "${dmgs[0]}" ] || { echo "No macOS DMG was produced" >&2; exit 1; }
+          for app in "${apps[@]}"; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+          done
+          for dmg in "${dmgs[@]}"; do
+            xcrun stapler validate "$dmg"
+          done
 
       - name: 检查构建产物
         run: |
