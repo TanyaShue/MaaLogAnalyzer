@@ -42,12 +42,136 @@ export class ArchiveIntegrityError extends Error {
   readonly name = 'ArchiveIntegrityError'
 }
 
+export class LoadOperationCancelledError extends Error {
+  readonly name = 'LoadOperationCancelledError'
+
+  constructor() {
+    super('Load operation was superseded or cancelled')
+  }
+}
+
+export class LoadOperationDeliveryError extends Error {
+  readonly name = 'LoadOperationDeliveryError'
+}
+
+export interface LoadOperation {
+  readonly generation: number
+  readonly cancelled: boolean
+  throwIfCancelled(): void
+}
+
+class CoordinatedLoadOperation implements LoadOperation {
+  private wasCancelled = false
+
+  constructor(
+    readonly generation: number,
+    private readonly isStillCurrent: () => boolean,
+  ) {}
+
+  get cancelled(): boolean {
+    return this.wasCancelled || !this.isStillCurrent()
+  }
+
+  cancel(): void {
+    this.wasCancelled = true
+  }
+
+  throwIfCancelled(): void {
+    if (this.cancelled) throw new LoadOperationCancelledError()
+  }
+}
+
+/** Coordinates latest-wins analysis requests and serializes archive memory use. */
+export class LoadOperationCoordinator {
+  private nextGeneration = 0
+  private currentOperation: CoordinatedLoadOperation | undefined
+  private archiveTail: Promise<void> = Promise.resolve()
+
+  begin(): LoadOperation {
+    this.currentOperation?.cancel()
+    let operation!: CoordinatedLoadOperation
+    operation = new CoordinatedLoadOperation(
+      ++this.nextGeneration,
+      () => this.currentOperation === operation,
+    )
+    this.currentOperation = operation
+    return operation
+  }
+
+  cancelCurrent(): void {
+    this.currentOperation?.cancel()
+    this.currentOperation = undefined
+  }
+
+  async runArchiveExclusive<T>(
+    operation: LoadOperation,
+    task: () => PromiseLike<T> | T,
+  ): Promise<T> {
+    operation.throwIfCancelled()
+
+    const previous = this.archiveTail.catch(() => undefined)
+    let release = (): void => {}
+    const slot = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.archiveTail = previous.then(() => slot)
+
+    try {
+      await previous
+      operation.throwIfCancelled()
+      const result = await task()
+      operation.throwIfCancelled()
+      return result
+    } finally {
+      release()
+    }
+  }
+}
+
+export const isLoadOperationCancelled = (error: unknown): boolean => (
+  error instanceof LoadOperationCancelledError
+)
+
+export interface LoadMessageTarget<TMessage> {
+  postMessage(message: TMessage): PromiseLike<boolean>
+}
+
+export const deliverLoadOperationMessage = async <TMessage, TTarget extends LoadMessageTarget<TMessage>>(
+  operation: LoadOperation,
+  getTarget: () => TTarget | undefined,
+  message: TMessage,
+): Promise<void> => {
+  operation.throwIfCancelled()
+  const target = getTarget()
+  if (!target) {
+    throw new LoadOperationDeliveryError('The analysis webview is unavailable')
+  }
+
+  let delivered: boolean
+  try {
+    delivered = await target.postMessage(message)
+  } catch (error) {
+    operation.throwIfCancelled()
+    throw error
+  }
+
+  operation.throwIfCancelled()
+  if (getTarget() !== target) throw new LoadOperationCancelledError()
+  if (!delivered) {
+    throw new LoadOperationDeliveryError('The analysis webview rejected the load message')
+  }
+}
+
 export interface ArchiveEntryMetadata {
   name: string
   size: number
   originalSize: number
   compression: number
 }
+
+export type ArchiveActivityCheck = () => void
+
+const noArchiveActivityCheck: ArchiveActivityCheck = () => {}
 
 export interface ArchiveDirectoryBudget {
   entryCount: number
@@ -193,18 +317,22 @@ export const inspectZipDirectory = (
   data: Uint8Array,
   currentBudget: Readonly<ArchiveDirectoryBudget> = EMPTY_ARCHIVE_DIRECTORY_BUDGET,
   limits: Readonly<ArchiveLimits> = DEFAULT_ARCHIVE_LIMITS,
+  checkActive: ArchiveActivityCheck = noArchiveActivityCheck,
 ): { entries: ArchiveEntryMetadata[]; directoryBudget: ArchiveDirectoryBudget } => {
+  checkActive()
   const entries: ArchiveEntryMetadata[] = []
   let directoryBudget = currentBudget
 
   unzipSync(data, {
     filter: (entry) => {
+      checkActive()
       const metadata = copyEntryMetadata(entry)
       directoryBudget = addDirectoryEntry(directoryBudget, metadata, limits)
       entries.push(metadata)
       return false
     },
   })
+  checkActive()
 
   return { entries, directoryBudget }
 }
@@ -390,7 +518,9 @@ export const inspectArchiveVolumes = async <T>(
   inputs: readonly ArchiveVolumeInput<T>[],
   readVolume: (input: ArchiveVolumeInput<T>) => PromiseLike<Uint8Array>,
   limitOverrides: Partial<ArchiveLimits> = {},
+  checkActive: ArchiveActivityCheck = noArchiveActivityCheck,
 ): Promise<InspectedArchiveVolume<T>[]> => {
+  checkActive()
   const limits = resolveArchiveLimits(limitOverrides)
 
   // Stat metadata is checked before the first read so oversized selections do
@@ -403,14 +533,17 @@ export const inspectArchiveVolumes = async <T>(
   let directoryBudget = EMPTY_ARCHIVE_DIRECTORY_BUDGET
 
   for (const input of inputs) {
+    checkActive()
     const data = await readVolume(input)
+    checkActive()
     actualInputs.push({ size: data.byteLength })
     assertArchiveInputsWithinLimits(actualInputs, limits)
 
-    const directory = inspectZipDirectory(data, directoryBudget, limits)
+    const directory = inspectZipDirectory(data, directoryBudget, limits, checkActive)
     directoryBudget = directory.directoryBudget
     assertUniqueCanonicalArchivePaths(directory.entries, canonicalPaths)
     inspected.push({ input, entries: directory.entries })
+    checkActive()
   }
 
   return inspected
@@ -461,9 +594,12 @@ const unzipSelectedEntries = async (
   selectedEntries: readonly ArchiveEntryMetadata[],
   initialExtractedBytes: number,
   limits: Readonly<ArchiveLimits>,
+  checkActive: ArchiveActivityCheck,
 ): Promise<StreamedArchiveEntries> => {
+  checkActive()
   const metadataByName = new Map<string, ArchiveEntryMetadata>()
   for (const entry of selectedEntries) {
+    checkActive()
     if (metadataByName.has(entry.name)) {
       throw new ArchiveIntegrityError(`Duplicate selected archive entry: ${entry.name}`)
     }
@@ -479,6 +615,7 @@ const unzipSelectedEntries = async (
   }
   let extractedBytes = initialExtractedBytes
   const archive = new Unzip((file) => {
+    checkActive()
     const metadata = metadataByName.get(file.name)
     if (!metadata) return
     if (startedNames.has(file.name)) {
@@ -500,6 +637,7 @@ const unzipSelectedEntries = async (
     const output = new Uint8Array(metadata.originalSize)
     let outputOffset = 0
     file.ondata = (error, chunk, final) => {
+      checkActive()
       if (error) throw error
       const dataChunk = chunk ?? new Uint8Array()
       const nextOffset = addSize(outputOffset, dataChunk.byteLength, 'actual file size')
@@ -523,12 +661,19 @@ const unzipSelectedEntries = async (
 
   try {
     if (data.byteLength === 0) {
+      checkActive()
       archive.push(data, true)
+      checkActive()
     } else {
       for (let offset = 0; offset < data.byteLength; offset += STREAM_INPUT_CHUNK_BYTES) {
+        checkActive()
         const end = Math.min(offset + STREAM_INPUT_CHUNK_BYTES, data.byteLength)
         archive.push(data.subarray(offset, end), end === data.byteLength)
-        if (end < data.byteLength) await yieldToExtensionHost()
+        checkActive()
+        if (end < data.byteLength) {
+          await yieldToExtensionHost()
+          checkActive()
+        }
       }
     }
   } catch (error) {
@@ -543,6 +688,7 @@ const unzipSelectedEntries = async (
   }
 
   for (const name of metadataByName.keys()) {
+    checkActive()
     if (!entries.has(name)) {
       throw new ArchiveIntegrityError(`Selected archive entry is missing or incomplete: ${name}`)
     }
@@ -560,7 +706,9 @@ export const readSelectedArchiveVolumes = async <T>(
     entries: ReadonlyMap<string, Uint8Array>,
   ) => void | Promise<void>,
   limitOverrides: Partial<ArchiveLimits> = {},
+  checkActive: ArchiveActivityCheck = noArchiveActivityCheck,
 ): Promise<void> => {
+  checkActive()
   const limits = resolveArchiveLimits(limitOverrides)
   const inputs = inspectedVolumes.map(volume => volume.input)
   assertArchiveInputsWithinLimits(inputs, limits)
@@ -572,6 +720,7 @@ export const readSelectedArchiveVolumes = async <T>(
   )
   assertExtractedEntriesWithinLimits(plannedEntries, limits)
   assertVSCodeIpcEntriesWithinLimits(plannedEntries)
+  checkActive()
 
   const actualInputs: Array<{ size: number }> = []
   const currentSelectedEntries: ArchiveEntryMetadata[] = []
@@ -580,13 +729,15 @@ export const readSelectedArchiveVolumes = async <T>(
   let directoryBudget = EMPTY_ARCHIVE_DIRECTORY_BUDGET
 
   for (const inspectedVolume of inspectedVolumes) {
+    checkActive()
     const data = await readVolume(inspectedVolume.input)
+    checkActive()
     actualInputs.push({ size: data.byteLength })
     assertArchiveInputsWithinLimits(actualInputs, limits)
 
     // Re-inspect the exact bytes that will be expanded. This closes the gap if
     // a local archive changed while the selection dialog was open.
-    const currentDirectory = inspectZipDirectory(data, directoryBudget, limits)
+    const currentDirectory = inspectZipDirectory(data, directoryBudget, limits, checkActive)
     directoryBudget = currentDirectory.directoryBudget
     assertUniqueCanonicalArchivePaths(currentDirectory.entries, canonicalPaths)
     const neededEntries = getNeededArchiveEntries(currentDirectory.entries, selection)
@@ -595,14 +746,18 @@ export const readSelectedArchiveVolumes = async <T>(
     assertVSCodeIpcEntriesWithinLimits(currentSelectedEntries)
 
     if (neededEntries.length === 0) continue
+    checkActive()
     const streamed = await unzipSelectedEntries(
       data,
       neededEntries,
       actualExtractedBytes,
       limits,
+      checkActive,
     )
+    checkActive()
     actualExtractedBytes = streamed.extractedBytes
     await consumeEntries(inspectedVolume, streamed.entries)
+    checkActive()
   }
 }
 

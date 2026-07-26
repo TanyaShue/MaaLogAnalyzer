@@ -11,10 +11,14 @@ import {
   createArchiveSelection,
   createStoredEntryMetadata,
   decodeArchiveText,
+  deliverLoadOperationMessage,
   inspectArchiveVolumes,
+  isLoadOperationCancelled,
+  LoadOperationCoordinator,
   readSelectedArchiveVolumes,
   type ArchiveEntryMetadata,
   type ArchiveVolumeInput,
+  type LoadOperation,
 } from './archiveReader'
 import {
   gateExternalAnalysisUri,
@@ -23,6 +27,7 @@ import {
 } from './externalUriGate'
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined
+const loadOperationCoordinator = new LoadOperationCoordinator()
 const execFileAsync = promisify(execFile)
 const isZh = vscode.env.language.toLowerCase().startsWith('zh')
 const t = (en: string, zh: string) => (isZh ? zh : en)
@@ -30,6 +35,15 @@ const t = (en: string, zh: string) => (isZh ? zh : en)
 const PRIMARY_LOG_FILE_HINT = 'maa.log / maa.bak*.log / maafw.log / maafw.bak*.log'
 const MAIN_LOG_RE = /^(maa|maafw)\.log$/i
 const BAK_LOG_RE = /^(maa|maafw)\.bak(?:\.(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}\.\d{1,3}))?\.log$/i
+
+const postLoadMessage = async (operation: LoadOperation, message: unknown): Promise<void> => {
+  await deliverLoadOperationMessage(operation, () => currentPanel?.webview, message)
+}
+
+const showLoadError = (prefix: string, error: unknown, operation: LoadOperation): void => {
+  if (operation.cancelled || isLoadOperationCancelled(error)) return
+  vscode.window.showErrorMessage(`${prefix}: ${error}`)
+}
 
 type PrimaryLogKind = 'main' | 'bak'
 
@@ -508,6 +522,7 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
   currentPanel.onDidDispose(
     () => {
       themeChangeDisposable.dispose()
+      loadOperationCoordinator.cancelCurrent()
       currentPanel = undefined
     },
     undefined,
@@ -517,20 +532,26 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
   return currentPanel
 }
 
-async function analyzeFileUri(uri: vscode.Uri): Promise<void> {
-  if (uri.fsPath.toLowerCase().endsWith('.zip')) {
-    await handleZipFile(uri)
-    return
-  }
-
+async function analyzeFileUri(
+  uri: vscode.Uri,
+  operation: LoadOperation = loadOperationCoordinator.begin(),
+): Promise<void> {
   try {
+    operation.throwIfCancelled()
+    if (uri.fsPath.toLowerCase().endsWith('.zip')) {
+      await handleZipFile(uri, operation)
+      return
+    }
+
     const fileName = path.basename(uri.fsPath)
     const stat = await vscode.workspace.fs.stat(uri)
+    operation.throwIfCancelled()
     const plannedEntry = createStoredEntryMetadata(uri.fsPath, stat.size)
     assertExtractedEntriesWithinLimits([plannedEntry])
     assertVSCodeIpcEntriesWithinLimits([plannedEntry])
 
     const fileContent = await vscode.workspace.fs.readFile(uri)
+    operation.throwIfCancelled()
     const actualEntry = createStoredEntryMetadata(uri.fsPath, fileContent.byteLength)
     assertExtractedEntriesWithinLimits([actualEntry])
     assertVSCodeIpcEntriesWithinLimits([actualEntry])
@@ -538,9 +559,11 @@ async function analyzeFileUri(uri: vscode.Uri): Promise<void> {
     const debugAssets = await collectDebugAssetsForBaseDirectory(
       vscode.Uri.file(path.dirname(uri.fsPath)),
       [actualEntry],
+      operation,
     )
+    operation.throwIfCancelled()
 
-    currentPanel?.webview.postMessage({
+    await postLoadMessage(operation, {
       type: 'loadFile',
       content,
       fileName,
@@ -549,7 +572,7 @@ async function analyzeFileUri(uri: vscode.Uri): Promise<void> {
       waitFreezesImages: debugAssets.waitFreezesImages,
     })
   } catch (error) {
-    vscode.window.showErrorMessage(`无法读取文件: ${error}`)
+    showLoadError('无法读取文件', error, operation)
   }
 }
 
@@ -599,29 +622,40 @@ async function pickUriForAnalysis(): Promise<vscode.Uri | undefined> {
   return selected?.[0]
 }
 
-async function analyzeUri(uri: vscode.Uri): Promise<void> {
+async function analyzeUri(
+  uri: vscode.Uri,
+  operation: LoadOperation = loadOperationCoordinator.begin(),
+): Promise<void> {
   try {
+    operation.throwIfCancelled()
     const stat = await vscode.workspace.fs.stat(uri)
+    operation.throwIfCancelled()
     if ((stat.type & vscode.FileType.Directory) === vscode.FileType.Directory) {
-      await analyzeFolderUri(uri)
+      await analyzeFolderUri(uri, operation)
       return
     }
-  } catch {
+  } catch (error) {
+    if (isLoadOperationCancelled(error) || operation.cancelled) return
     // fallback to extension-based detection below
   }
 
+  operation.throwIfCancelled()
   const lower = uri.fsPath.toLowerCase()
   const looksLikeFile = lower.endsWith('.zip') || lower.endsWith('.log') || lower.endsWith('.jsonl') || lower.endsWith('.txt')
   if (looksLikeFile) {
-    await analyzeFileUri(uri)
+    await analyzeFileUri(uri, operation)
     return
   }
 
-  await analyzeFolderUri(uri)
+  await analyzeFolderUri(uri, operation)
 }
 
-async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
+async function analyzeFolderUri(
+  folderUri: vscode.Uri,
+  operation: LoadOperation = loadOperationCoordinator.begin(),
+): Promise<void> {
   try {
+    operation.throwIfCancelled()
     const candidatePatterns = [
       '**/maa.log',
       '**/maafw.log',
@@ -631,6 +665,7 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
     const candidateLists = await Promise.all(
       candidatePatterns.map(pattern => vscode.workspace.findFiles(pattern, '**/node_modules/**', 200)),
     )
+    operation.throwIfCancelled()
 
     const primaryLogUris = candidateLists
       .flat()
@@ -645,9 +680,10 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
     const selectedLogs = selectPrimaryLogGroup(primaryLogEntries)
 
     if (selectedLogs.length === 0) {
-      const splitZipUri = await findFirstMxuZipVolumeUri(folderUri)
+      const splitZipUri = await findFirstMxuZipVolumeUri(folderUri, operation)
+      operation.throwIfCancelled()
       if (splitZipUri) {
-        await handleZipFile(splitZipUri)
+        await handleZipFile(splitZipUri, operation)
         return
       }
       vscode.window.showErrorMessage(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
@@ -656,6 +692,7 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
 
     const selectionEntries = await Promise.all(selectedLogs.map(async ({ item, candidate }) => {
       const stat = await vscode.workspace.fs.stat(item.uri)
+      operation.throwIfCancelled()
       return {
         path: item.path,
         name: item.name,
@@ -664,7 +701,9 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
         size: stat.size,
       } satisfies PrimaryLogSelectionEntry
     }))
+    operation.throwIfCancelled()
     const selectedPaths = await pickPrimaryLogSelection(selectionEntries)
+    operation.throwIfCancelled()
     if (!selectedPaths) return
 
     const selectedLogEntries = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
@@ -680,7 +719,9 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
     const loadedSegments: Array<{ path: string; name: string; uri: vscode.Uri; content: string }> = []
     const actualLogEntries: ArchiveEntryMetadata[] = []
     for (const { item } of selectedLogEntries) {
+      operation.throwIfCancelled()
       const bytes = await vscode.workspace.fs.readFile(item.uri)
+      operation.throwIfCancelled()
       actualLogEntries.push(createStoredEntryMetadata(item.path, bytes.byteLength))
       assertExtractedEntriesWithinLimits(actualLogEntries)
       assertVSCodeIpcEntriesWithinLimits(actualLogEntries)
@@ -712,9 +753,14 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
     const contentBaseDir = targetMain
       ? getParentUri(targetMain)
       : selectedBaseDir
-    const debugAssets = await collectDebugAssetsForBaseDirectory(contentBaseDir, actualLogEntries)
+    const debugAssets = await collectDebugAssetsForBaseDirectory(
+      contentBaseDir,
+      actualLogEntries,
+      operation,
+    )
+    operation.throwIfCancelled()
 
-    currentPanel?.webview.postMessage({
+    await postLoadMessage(operation, {
       type: 'loadFile',
       content: '',
       primaryLogFiles,
@@ -724,15 +770,17 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
       waitFreezesImages: debugAssets.waitFreezesImages,
     })
   } catch (error) {
-    vscode.window.showErrorMessage(`无法读取文件夹: ${error}`)
+    showLoadError('无法读取文件夹', error, operation)
   }
 }
 
-async function pathExists(uri: vscode.Uri): Promise<boolean> {
+async function pathExists(uri: vscode.Uri, operation: LoadOperation): Promise<boolean> {
   try {
     await vscode.workspace.fs.stat(uri)
+    operation.throwIfCancelled()
     return true
-  } catch {
+  } catch (error) {
+    operation.throwIfCancelled()
     return false
   }
 }
@@ -754,17 +802,22 @@ const bytesToBase64 = (bytes: Uint8Array): string => (
 async function listImageDirectoryEntries(
   dirUri: vscode.Uri,
   classify: (fileName: string) => { key: string; kind: DebugImageKind } | null,
+  operation: LoadOperation,
 ): Promise<DebugImageCandidate[]> {
-  if (!(await pathExists(dirUri))) return []
+  if (!(await pathExists(dirUri, operation))) return []
+  operation.throwIfCancelled()
 
   const candidates: DebugImageCandidate[] = []
   const entries = await vscode.workspace.fs.readDirectory(dirUri)
+  operation.throwIfCancelled()
   for (const [name, type] of entries) {
+    operation.throwIfCancelled()
     if (type !== vscode.FileType.File) continue
     const classified = classify(name)
     if (!classified) continue
     const uri = vscode.Uri.joinPath(dirUri, name)
     const stat = await vscode.workspace.fs.stat(uri)
+    operation.throwIfCancelled()
     candidates.push({ uri, name, size: stat.size, ...classified })
   }
   return candidates
@@ -772,7 +825,8 @@ async function listImageDirectoryEntries(
 
 async function collectDebugAssetsForBaseDirectory(
   baseDirUri: vscode.Uri,
-  initialEntries: readonly ArchiveEntryMetadata[] = [],
+  initialEntries: readonly ArchiveEntryMetadata[],
+  operation: LoadOperation,
 ): Promise<{
   errorImages: Array<{ key: string; base64: string }>
   visionImages: Array<{ key: string; base64: string }>
@@ -785,8 +839,11 @@ async function collectDebugAssetsForBaseDirectory(
   let debugDirUri: vscode.Uri | undefined
 
   for (const candidate of candidateDirs) {
-    const hasOnError = await pathExists(vscode.Uri.joinPath(candidate, 'on_error'))
-    const hasVision = await pathExists(vscode.Uri.joinPath(candidate, 'vision'))
+    operation.throwIfCancelled()
+    const hasOnError = await pathExists(vscode.Uri.joinPath(candidate, 'on_error'), operation)
+    operation.throwIfCancelled()
+    const hasVision = await pathExists(vscode.Uri.joinPath(candidate, 'vision'), operation)
+    operation.throwIfCancelled()
     if (hasOnError || hasVision) {
       debugDirUri = candidate
       break
@@ -803,7 +860,9 @@ async function collectDebugAssetsForBaseDirectory(
       const key = parseErrorImageKey(name)
       return key ? { key, kind: 'error' } : null
     },
+    operation,
   )
+  operation.throwIfCancelled()
   const visionDirUri = vscode.Uri.joinPath(debugDirUri, 'vision')
   candidates.push(...await listImageDirectoryEntries(
     visionDirUri,
@@ -813,7 +872,9 @@ async function collectDebugAssetsForBaseDirectory(
       const visionKey = parseVisionImageKey(name)
       return visionKey ? { key: visionKey, kind: 'vision' } : null
     },
+    operation,
   ))
+  operation.throwIfCancelled()
 
   const plannedEntries = [
     ...initialEntries,
@@ -827,7 +888,9 @@ async function collectDebugAssetsForBaseDirectory(
   const waitFreezesImages: Array<{ key: string; base64: string }> = []
   const actualEntries = [...initialEntries]
   for (const candidate of candidates) {
+    operation.throwIfCancelled()
     const bytes = await vscode.workspace.fs.readFile(candidate.uri)
+    operation.throwIfCancelled()
     actualEntries.push(createStoredEntryMetadata(candidate.uri.path, bytes.byteLength))
     assertExtractedEntriesWithinLimits(actualEntries)
     assertVSCodeIpcEntriesWithinLimits(actualEntries)
@@ -998,7 +1061,11 @@ function parseMxuZipVolumeName(fileName: string): MxuZipVolumeInfo | null {
   return { baseName: match[1], index }
 }
 
-async function collectMxuZipVolumeUris(uri: vscode.Uri): Promise<vscode.Uri[]> {
+async function collectMxuZipVolumeUris(
+  uri: vscode.Uri,
+  operation: LoadOperation,
+): Promise<vscode.Uri[]> {
+  operation.throwIfCancelled()
   const selectedName = path.posix.basename(uri.path)
   const selectedInfo = parseMxuZipVolumeName(selectedName)
   if (!selectedInfo) return [uri]
@@ -1007,7 +1074,9 @@ async function collectMxuZipVolumeUris(uri: vscode.Uri): Promise<vscode.Uri[]> {
   let entries: [string, vscode.FileType][]
   try {
     entries = await vscode.workspace.fs.readDirectory(directory)
-  } catch {
+    operation.throwIfCancelled()
+  } catch (error) {
+    operation.throwIfCancelled()
     return [uri]
   }
 
@@ -1025,8 +1094,13 @@ async function collectMxuZipVolumeUris(uri: vscode.Uri): Promise<vscode.Uri[]> {
   return volumes.length > 0 ? volumes : [uri]
 }
 
-async function findFirstMxuZipVolumeUri(directory: vscode.Uri): Promise<vscode.Uri | null> {
+async function findFirstMxuZipVolumeUri(
+  directory: vscode.Uri,
+  operation: LoadOperation,
+): Promise<vscode.Uri | null> {
+  operation.throwIfCancelled()
   const entries: [string, vscode.FileType][] = await vscode.workspace.fs.readDirectory(directory)
+  operation.throwIfCancelled()
   const first = entries
     .filter(([, type]) => type === vscode.FileType.File)
     .map(([name]) => ({ name, info: parseMxuZipVolumeName(name) }))
@@ -1043,28 +1117,51 @@ async function findFirstMxuZipVolumeUri(directory: vscode.Uri): Promise<vscode.U
  * 在扩展进程内按预算检查并选择性解压 ZIP。
  * Webview 只接收已筛选的文本与图片，避免完整 ZIP 的 Base64 往返副本。
  */
-async function handleZipFile(uri: vscode.Uri): Promise<void> {
+async function handleZipFile(uri: vscode.Uri, operation: LoadOperation): Promise<void> {
   try {
-    const volumeUris = await collectMxuZipVolumeUris(uri)
-    const volumeInputs: Array<ArchiveVolumeInput<vscode.Uri>> = await Promise.all(
-      volumeUris.map(async (volumeUri) => ({
-        source: volumeUri,
-        name: path.posix.basename(volumeUri.path),
-        size: (await vscode.workspace.fs.stat(volumeUri)).size,
-      })),
-    )
+    operation.throwIfCancelled()
+    const checkActive = () => operation.throwIfCancelled()
+    const volumeUris = await collectMxuZipVolumeUris(uri, operation)
+    operation.throwIfCancelled()
     const readVolume = (input: ArchiveVolumeInput<vscode.Uri>) => (
       vscode.workspace.fs.readFile(input.source)
     )
-    const inspectedVolumes = await inspectArchiveVolumes(volumeInputs, readVolume)
-    const entrySizes = new Map<string, number>()
-    for (const volume of inspectedVolumes) {
-      for (const entry of volume.entries) {
-        entrySizes.set(canonicalizeArchivePath(entry.name), entry.originalSize)
-      }
-    }
 
-    const selectedLogs = selectPrimaryLogGroup(Array.from(entrySizes.keys()).map(filePath => ({
+    // Release the archive memory gate while the user is choosing logs. A newer
+    // request can then inspect its archive without waiting for a stale dialog,
+    // while both read/inflate phases remain strictly serialized.
+    const inspection = await loadOperationCoordinator.runArchiveExclusive(operation, async () => {
+      const volumeInputs: Array<ArchiveVolumeInput<vscode.Uri>> = await Promise.all(
+        volumeUris.map(async (volumeUri) => {
+          const stat = await vscode.workspace.fs.stat(volumeUri)
+          operation.throwIfCancelled()
+          return {
+            source: volumeUri,
+            name: path.posix.basename(volumeUri.path),
+            size: stat.size,
+          }
+        }),
+      )
+      operation.throwIfCancelled()
+      const inspectedVolumes = await inspectArchiveVolumes(
+        volumeInputs,
+        readVolume,
+        {},
+        checkActive,
+      )
+      operation.throwIfCancelled()
+      const entrySizes = new Map<string, number>()
+      for (const volume of inspectedVolumes) {
+        operation.throwIfCancelled()
+        for (const entry of volume.entries) {
+          entrySizes.set(canonicalizeArchivePath(entry.name), entry.originalSize)
+        }
+      }
+      return { inspectedVolumes, entrySizes }
+    })
+    operation.throwIfCancelled()
+
+    const selectedLogs = selectPrimaryLogGroup(Array.from(inspection.entrySizes.keys()).map(filePath => ({
       path: filePath,
       name: filePath.replace(/\\/g, '/').split('/').pop() || filePath,
     })))
@@ -1078,81 +1175,89 @@ async function handleZipFile(uri: vscode.Uri): Promise<void> {
       name: item.name,
       kind: candidate.kind,
       rotatedTimestampHint: candidate.rotatedTimestampHint,
-      size: entrySizes.get(item.path) ?? 0,
+      size: inspection.entrySizes.get(item.path) ?? 0,
     }))
     const selectedPaths = await pickPrimaryLogSelection(selectionEntries)
+    operation.throwIfCancelled()
     if (!selectedPaths) return
 
-    const selection = createArchiveSelection(selectedPaths, selectedLogs[0].candidate.dirPath)
-    const primaryLogsByPath = new Map<string, { path: string; name: string; content: string }>()
-    const textFilesByPath = new Map<string, { path: string; name: string; content: string }>()
-    const errorImagesByKey = new Map<string, string>()
-    const visionImagesByKey = new Map<string, string>()
-    const waitFreezesImagesByKey = new Map<string, string>()
+    await loadOperationCoordinator.runArchiveExclusive(operation, async () => {
+      const selection = createArchiveSelection(selectedPaths, selectedLogs[0].candidate.dirPath)
+      const primaryLogsByPath = new Map<string, { path: string; name: string; content: string }>()
+      const textFilesByPath = new Map<string, { path: string; name: string; content: string }>()
+      const errorImagesByKey = new Map<string, string>()
+      const visionImagesByKey = new Map<string, string>()
+      const waitFreezesImagesByKey = new Map<string, string>()
 
-    await readSelectedArchiveVolumes(
-      inspectedVolumes,
-      selection,
-      readVolume,
-      (_volume, entries) => {
-        for (const [entryPath, bytes] of entries) {
-          const kind = classifyNeededArchiveEntry(entryPath, selection)
-          if (!kind) continue
+      await readSelectedArchiveVolumes(
+        inspection.inspectedVolumes,
+        selection,
+        readVolume,
+        (_volume, entries) => {
+          operation.throwIfCancelled()
+          for (const [entryPath, bytes] of entries) {
+            operation.throwIfCancelled()
+            const kind = classifyNeededArchiveEntry(entryPath, selection)
+            if (!kind) continue
 
-          const normalizedPath = canonicalizeArchivePath(entryPath)
-          const name = normalizedPath.split('/').pop() || normalizedPath
-          if (kind === 'primary-log') {
-            primaryLogsByPath.set(normalizedPath, {
-              path: normalizedPath,
-              name,
-              content: decodeArchiveText(bytes),
-            })
-            continue
+            const normalizedPath = canonicalizeArchivePath(entryPath)
+            const name = normalizedPath.split('/').pop() || normalizedPath
+            if (kind === 'primary-log') {
+              primaryLogsByPath.set(normalizedPath, {
+                path: normalizedPath,
+                name,
+                content: decodeArchiveText(bytes),
+              })
+              continue
+            }
+            if (kind === 'text') {
+              textFilesByPath.set(normalizedPath, {
+                path: normalizedPath,
+                name,
+                content: decodeArchiveText(bytes),
+              })
+              continue
+            }
+
+            const base64 = bytesToBase64(bytes)
+            const errorKey = parseErrorImageKey(name)
+            if (errorKey) {
+              errorImagesByKey.set(errorKey, base64)
+              continue
+            }
+            const waitFreezesKey = parseWaitFreezesKey(name)
+            if (waitFreezesKey) {
+              waitFreezesImagesByKey.set(waitFreezesKey, base64)
+              continue
+            }
+            const visionKey = parseVisionImageKey(name)
+            if (visionKey) visionImagesByKey.set(visionKey, base64)
           }
-          if (kind === 'text') {
-            textFilesByPath.set(normalizedPath, {
-              path: normalizedPath,
-              name,
-              content: decodeArchiveText(bytes),
-            })
-            continue
-          }
+        },
+        {},
+        checkActive,
+      )
+      operation.throwIfCancelled()
 
-          const base64 = bytesToBase64(bytes)
-          const errorKey = parseErrorImageKey(name)
-          if (errorKey) {
-            errorImagesByKey.set(errorKey, base64)
-            continue
-          }
-          const waitFreezesKey = parseWaitFreezesKey(name)
-          if (waitFreezesKey) {
-            waitFreezesImagesByKey.set(waitFreezesKey, base64)
-            continue
-          }
-          const visionKey = parseVisionImageKey(name)
-          if (visionKey) visionImagesByKey.set(visionKey, base64)
-        }
-      },
-    )
+      const primaryLogFiles = sortLoadedPrimaryLogSegments(Array.from(primaryLogsByPath.values()))
+      if (primaryLogFiles.length === 0) {
+        vscode.window.showWarningMessage('ZIP 文件在读取期间发生变化，未能读取到所选日志')
+        return
+      }
 
-    const primaryLogFiles = sortLoadedPrimaryLogSegments(Array.from(primaryLogsByPath.values()))
-    if (primaryLogFiles.length === 0) {
-      vscode.window.showWarningMessage('ZIP 文件在读取期间发生变化，未能读取到所选日志')
-      return
-    }
-
-    currentPanel?.webview.postMessage({
-      type: 'loadFile',
-      content: '',
-      fileName: path.posix.basename(uri.path),
-      primaryLogFiles,
-      textFiles: Array.from(textFilesByPath.values()).sort((a, b) => a.path.localeCompare(b.path)),
-      errorImages: Array.from(errorImagesByKey, ([key, base64]) => ({ key, base64 })),
-      visionImages: Array.from(visionImagesByKey, ([key, base64]) => ({ key, base64 })),
-      waitFreezesImages: Array.from(waitFreezesImagesByKey, ([key, base64]) => ({ key, base64 })),
+      await postLoadMessage(operation, {
+        type: 'loadFile',
+        content: '',
+        fileName: path.posix.basename(uri.path),
+        primaryLogFiles,
+        textFiles: Array.from(textFilesByPath.values()).sort((a, b) => a.path.localeCompare(b.path)),
+        errorImages: Array.from(errorImagesByKey, ([key, base64]) => ({ key, base64 })),
+        visionImages: Array.from(visionImagesByKey, ([key, base64]) => ({ key, base64 })),
+        waitFreezesImages: Array.from(waitFreezesImagesByKey, ([key, base64]) => ({ key, base64 })),
+      })
     })
   } catch (error) {
-    vscode.window.showErrorMessage(`读取 ZIP 文件失败: ${error}`)
+    showLoadError('读取 ZIP 文件失败', error, operation)
   }
 }
 function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -1224,4 +1329,6 @@ function getNonce(): string {
   return text
 }
 
-export function deactivate() {}
+export function deactivate() {
+  loadOperationCoordinator.cancelCurrent()
+}
