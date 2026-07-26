@@ -5,8 +5,18 @@
  * 使用 fflate 的 filter 选项，只解压需要的文件，避免大 ZIP 全量解压导致内存暴涨。
  */
 
-import { unzip, unzipSync, type Unzipped } from 'fflate'
+import { unzip, unzipSync, type UnzipFileInfo, type Unzipped } from 'fflate'
 import { decodeFileContent } from './textEncoding'
+import {
+  addArchiveDirectoryEntry,
+  assertArchiveInputsWithinLimits,
+  assertSelectedArchiveEntriesWithinLimits,
+  EMPTY_ARCHIVE_DIRECTORY_BUDGET,
+  resolveArchiveLimits,
+  type ArchiveDirectoryBudget,
+  type ArchiveEntryMetadata,
+  type ArchiveLimits,
+} from './archiveLimits'
 import {
   createPrimaryLogSelectionOptions,
   isPrimaryLogFileName,
@@ -28,6 +38,7 @@ export type { ExtractedTextFile } from './archiveShared'
 
 export interface ExtractZipContentOptions {
   includeAuxiliaryFiles?: boolean
+  archiveLimits?: Partial<ArchiveLimits>
 }
 
 function toMap(record: Record<string, Uint8Array>): Map<string, Uint8Array> {
@@ -57,19 +68,44 @@ function findFile(
 
 interface BufferedZipArchive {
   data: Uint8Array
-  paths: string[]
+  entries: ArchiveEntryMetadata[]
 }
 
-async function bufferZipArchive(file: File): Promise<BufferedZipArchive> {
-  const data = new Uint8Array(await file.arrayBuffer())
-  const paths: string[] = []
+function inspectZipArchive(
+  data: Uint8Array,
+  currentBudget: Readonly<ArchiveDirectoryBudget>,
+  limits: Readonly<ArchiveLimits>,
+): BufferedZipArchive & { directoryBudget: ArchiveDirectoryBudget } {
+  const entries: ArchiveEntryMetadata[] = []
+  let directoryBudget = currentBudget
   unzipSync(data, {
     filter: (entry) => {
-      paths.push(entry.name)
+      const metadata = copyEntryMetadata(entry)
+      directoryBudget = addArchiveDirectoryEntry(directoryBudget, metadata, limits)
+      entries.push(metadata)
       return false
     },
   })
-  return { data, paths }
+  return { data, entries, directoryBudget }
+}
+
+function copyEntryMetadata(entry: UnzipFileInfo): ArchiveEntryMetadata {
+  return {
+    name: entry.name,
+    size: entry.size,
+    originalSize: entry.originalSize,
+    compression: entry.compression,
+  }
+}
+
+function shouldExtractEntry(
+  entryName: string,
+  includeAuxiliaryFiles: boolean,
+  selectedPaths: Set<string>,
+): boolean {
+  const fileName = entryName.replace(/\\/g, '/').split('/').pop() ?? ''
+  if (isPrimaryLogFileName(fileName)) return selectedPaths.has(entryName)
+  return includeAuxiliaryFiles && isNeededFile(entryName)
 }
 
 async function unzipNeededFiles(
@@ -81,11 +117,7 @@ async function unzipNeededFiles(
     unzip(
       zipData,
       {
-        filter: (entry) => {
-          const fileName = entry.name.replace(/\\/g, '/').split('/').pop() ?? ''
-          if (isPrimaryLogFileName(fileName)) return selectedPaths.has(entry.name)
-          return includeAuxiliaryFiles && isNeededFile(entry.name)
-        },
+        filter: entry => shouldExtractEntry(entry.name, includeAuxiliaryFiles, selectedPaths),
       },
       (err, unzipped) => {
         if (err) reject(err)
@@ -112,8 +144,28 @@ export async function extractZipContents(
   primaryLogFiles: LoadedPrimaryLogFile[]
 } | null> {
   const includeAuxiliaryFiles = options.includeAuxiliaryFiles !== false
-  const archives = await Promise.all(archiveFiles.map(bufferZipArchive))
-  const archivePaths = Array.from(new Set(archives.flatMap(archive => archive.paths)))
+  const limits = resolveArchiveLimits(options.archiveLimits)
+
+  // File metadata is available without allocating archive buffers. Reject an
+  // oversized multi-volume selection before calling arrayBuffer on any file.
+  assertArchiveInputsWithinLimits(archiveFiles, limits)
+
+  const archives: BufferedZipArchive[] = []
+  const actualArchiveInputs: Array<{ size: number }> = []
+  let directoryBudget = EMPTY_ARCHIVE_DIRECTORY_BUDGET
+  for (const file of archiveFiles) {
+    const data = new Uint8Array(await file.arrayBuffer())
+    actualArchiveInputs.push({ size: data.byteLength })
+    assertArchiveInputsWithinLimits(actualArchiveInputs, limits)
+
+    const inspected = inspectZipArchive(data, directoryBudget, limits)
+    directoryBudget = inspected.directoryBudget
+    archives.push({ data: inspected.data, entries: inspected.entries })
+  }
+
+  const archivePaths = Array.from(new Set(archives.flatMap(
+    archive => archive.entries.map(entry => entry.name),
+  )))
 
   const selectedLogs = selectPrimaryLogGroup(archivePaths.map((path) => ({
     path,
@@ -130,6 +182,13 @@ export async function extractZipContents(
     return null
   }
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
+
+  // Validate every entry that the fflate filter will accept before starting
+  // asynchronous decompression, including duplicate paths across ZIP volumes.
+  const selectedEntries = archives.flatMap(archive => archive.entries.filter(
+    entry => shouldExtractEntry(entry.name, includeAuxiliaryFiles, selectedPaths),
+  ))
+  assertSelectedArchiveEntriesWithinLimits(selectedEntries, limits)
 
   const files = Object.create(null) as Unzipped
   for (const archive of archives) {

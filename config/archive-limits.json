@@ -1,0 +1,12 @@
+{
+  "maxVolumes": 16,
+  "maxCompressedBytes": 268435456,
+  "maxEntries": 10000,
+  "maxPathBytes": 4096,
+  "maxTotalPathBytes": 8388608,
+  "maxFileBytes": 268435456,
+  "maxImageBytes": 33554432,
+  "maxExtractedBytes": 536870912,
+  "maxCompressionRatio": 500,
+  "compressionRatioMinBytes": 1048576
+}
