@@ -50,6 +50,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           pnpm run build:packages
+          pnpm run typecheck:packages
           ./node_modules/.bin/vue-tsc --noEmit
 
       - name: 核心回归测试
