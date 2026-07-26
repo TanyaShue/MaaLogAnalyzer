@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "identifier": "com.maa.log-analyzer",
   "build": {
-    "beforeDevCommand": "pnpm run dev",
-    "beforeBuildCommand": "pnpm run build",
+    "beforeDevCommand": "corepack pnpm@10.34.5 run dev",
+    "beforeBuildCommand": "corepack pnpm@10.34.5 run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },

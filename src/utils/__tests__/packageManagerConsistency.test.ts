@@ -36,6 +36,12 @@ describe('package manager consistency', () => {
       .toContain(`corepack pnpm@${pnpmVersion}`)
     expect(Object.values(rootPackage.scripts ?? {}).join('\n'))
       .not.toMatch(/(?:^|&&\s*)pnpm\s/)
+
+    const tauriConfig = JSON.parse(
+      readFileSync(resolve(root, 'src-tauri/tauri.conf.json'), 'utf8'),
+    ) as { build?: { beforeDevCommand?: string; beforeBuildCommand?: string } }
+    expect(tauriConfig.build?.beforeDevCommand).toContain(`corepack pnpm@${pnpmVersion}`)
+    expect(tauriConfig.build?.beforeBuildCommand).toContain(`corepack pnpm@${pnpmVersion}`)
   })
 
   it('uses frozen pnpm installs in CI', () => {
