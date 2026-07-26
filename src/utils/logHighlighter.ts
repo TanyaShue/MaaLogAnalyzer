@@ -37,7 +37,7 @@ export function parseLogLine(line: string): LogToken[] {
   let remaining = line
 
   while (remaining.length > 0) {
-    let match: RegExpMatchArray | null = null
+    let match: RegExpMatchArray | null
     let matchedType: LogToken['type'] | null = null
     let matchedLength = 0
 

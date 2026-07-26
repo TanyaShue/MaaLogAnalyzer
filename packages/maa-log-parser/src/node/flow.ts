@@ -202,7 +202,7 @@ const mapNestedPipelineNode = (
   const childTaskItems = (nestedNode.child_tasks ?? []).map((group, childIndex) =>
     mapNestedTaskGroup(group, `${baseId}.task.${childIndex}.${group.task_id}`)
   )
-  let children: UnifiedFlowItem[] = []
+  let children: UnifiedFlowItem[]
 
   if (nestedNode.node_flow && nestedNode.node_flow.length > 0) {
     const scopedNodeFlowChildren = nestedNode.node_flow.map((item, flowIndex) =>

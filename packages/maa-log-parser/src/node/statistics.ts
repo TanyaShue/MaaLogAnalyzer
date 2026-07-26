@@ -75,7 +75,7 @@ export class NodeStatisticsAnalyzer {
         const node = nodes[i]
         const nextNode = nodes[i + 1]
 
-        let duration = 0
+        let duration: number
         const currentTime = toTimestampMs(node.ts)
         if (node.end_ts) {
           duration = toTimestampMs(node.end_ts) - currentTime

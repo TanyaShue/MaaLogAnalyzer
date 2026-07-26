@@ -136,8 +136,8 @@ export const createRecognitionAttemptHelpers = (
       const startSeq = meta.startSeq
       const endSeq = Math.max(meta.startSeq, meta.endSeq)
 
-      let bucket = Number.POSITIVE_INFINITY
-      let distance = Number.POSITIVE_INFINITY
+      let bucket: number
+      let distance: number
 
       if (nodeStartSeq >= startSeq && nodeStartSeq <= endSeq) {
         bucket = 0

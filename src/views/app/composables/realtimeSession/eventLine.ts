@@ -59,7 +59,7 @@ export const createRealtimeEventLineBuilder = () => {
     const normalizedMsg = normalizeRealtimeMessage(event.msg)
     if (!normalizedMsg) return null
 
-    let detailsText = '{}'
+    let detailsText: string
     try {
       detailsText = JSON.stringify(event.details)
     } catch {
