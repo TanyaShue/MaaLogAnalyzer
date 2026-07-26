@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   publish:
+    if: ${{ github.repository_owner == 'MaaXYZ' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,14 +44,29 @@ jobs:
       - name: Build packages
         run: pnpm build:packages
 
-      - name: Publish packages
+      - name: Preflight package release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN}" ]; then
             echo "NPM_TOKEN is not set."
             exit 1
           fi
+          npm whoami >/dev/null
+
+          package_exists() {
+            local package_ref="$1"
+            local output
+            if output=$(npm view "${package_ref}" version 2>&1); then
+              return 0
+            fi
+            if grep -q 'E404' <<< "${output}"; then
+              return 1
+            fi
+            echo "${output}" >&2
+            exit 1
+          }
 
           packages=(
             "packages/maa-log-kernel"
@@ -59,21 +75,63 @@ jobs:
             "packages/maa-log-adapter"
             "packages/maa-log-tools"
           )
+          pack_root="${RUNNER_TEMP}/mla-npm-packages"
+          plan_file="${RUNNER_TEMP}/mla-npm-publish-plan.tsv"
+          mkdir -p "${pack_root}"
+          : > "${plan_file}"
 
-          for pkg_dir in "${packages[@]}"; do
+          for index in "${!packages[@]}"; do
+            pkg_dir="${packages[$index]}"
             echo "==== ${pkg_dir} ===="
-            cd "${pkg_dir}"
+            pkg_name=$(node -p "require('./${pkg_dir}/package.json').name")
+            pkg_ver=$(node -p "require('./${pkg_dir}/package.json').version")
+            package_ref="${pkg_name}@${pkg_ver}"
 
-            pkg_name=$(node -p "require('./package.json').name")
-            pkg_ver=$(node -p "require('./package.json').version")
-
-            if npm view "${pkg_name}@${pkg_ver}" >/dev/null 2>&1; then
-              echo "Skip existing: ${pkg_name}@${pkg_ver}"
-              cd - >/dev/null
+            if package_exists "${package_ref}"; then
+              echo "Skip existing: ${package_ref}"
               continue
             fi
 
-            echo "Publish ${pkg_name}@${pkg_ver}"
-            pnpm publish --access public --provenance --no-git-checks
-            cd - >/dev/null
+            pack_dir="${pack_root}/${index}"
+            mkdir -p "${pack_dir}"
+            pnpm --dir "${pkg_dir}" pack --pack-destination "${pack_dir}"
+            mapfile -t tarballs < <(find "${pack_dir}" -maxdepth 1 -type f -name '*.tgz')
+            if [ "${#tarballs[@]}" -ne 1 ]; then
+              echo "Expected one tarball for ${package_ref}, found ${#tarballs[@]}." >&2
+              exit 1
+            fi
+            printf '%s\t%s\n' "${tarballs[0]}" "${package_ref}" >> "${plan_file}"
           done
+
+      - name: Publish preflighted packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          plan_file="${RUNNER_TEMP}/mla-npm-publish-plan.tsv"
+          if [ ! -s "${plan_file}" ]; then
+            echo "All package versions already exist."
+            exit 0
+          fi
+
+          package_exists() {
+            local package_ref="$1"
+            local output
+            if output=$(npm view "${package_ref}" version 2>&1); then
+              return 0
+            fi
+            if grep -q 'E404' <<< "${output}"; then
+              return 1
+            fi
+            echo "${output}" >&2
+            exit 1
+          }
+
+          while IFS=$'\t' read -r tarball package_ref; do
+            if package_exists "${package_ref}"; then
+              echo "Skip concurrently published package: ${package_ref}"
+              continue
+            fi
+            echo "Publish ${package_ref}"
+            npm publish "${tarball}" --access public --provenance
+          done < "${plan_file}"
