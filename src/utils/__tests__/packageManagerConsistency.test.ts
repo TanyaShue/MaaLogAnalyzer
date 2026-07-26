@@ -22,5 +22,19 @@ describe('package manager consistency', () => {
 
     expect(setupVersions.length).toBeGreaterThan(0)
     expect(new Set(setupVersions)).toEqual(new Set([pnpmVersion]))
+
+    const vscodePackage = JSON.parse(
+      readFileSync(resolve(root, 'src-vscode/package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    expect(vscodePackage.scripts?.['build:webview'])
+      .toContain(`corepack pnpm@${pnpmVersion}`)
+
+    const rootPackage = JSON.parse(
+      readFileSync(resolve(root, 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    expect(rootPackage.scripts?.['build:packages'])
+      .toContain(`corepack pnpm@${pnpmVersion}`)
+    expect(Object.values(rootPackage.scripts ?? {}).join('\n'))
+      .not.toMatch(/(?:^|&&\s*)pnpm\s/)
   })
 })
