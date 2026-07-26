@@ -1,4 +1,13 @@
 import { replaceBlobUrl } from '../../../utils/blobUrlMap'
+import {
+  chargeBrowserInputFile,
+  BROWSER_INPUT_MAX_DIRECTORY_DEPTH,
+  createBrowserInputBudget,
+  registerBrowserInputEntry,
+  registerBrowserInputFile,
+  type BrowserInputBudget,
+} from '../../../utils/browserInputBudget'
+import { isPrimaryLogFileName } from '../../../utils/logFileDiscovery'
 
 export { isBakLogFileName, isMainLogFileName } from '../../../utils/logFileDiscovery'
 
@@ -33,15 +42,21 @@ const normalizeLoadedPath = (rawPath: string) => {
   return parts.length > 1 ? parts.slice(1).join('/') : normalized
 }
 
-export const collectTextFilesFromFiles = async (files: Iterable<File>): Promise<LoadedTextFile[]> => {
+export const collectTextFilesFromFiles = async (
+  files: Iterable<File>,
+  budget = createBrowserInputBudget(),
+): Promise<LoadedTextFile[]> => {
   const result: LoadedTextFile[] = []
   const seen = new Set<string>()
   for (const file of files) {
     if (!isSearchTextFileName(file.name)) continue
+    if (isPrimaryLogFileName(file.name)) continue
     const rawPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
     const path = normalizeLoadedPath(rawPath)
     if (seen.has(path)) continue
     seen.add(path)
+    registerBrowserInputFile(budget, file, rawPath)
+    chargeBrowserInputFile(budget, file)
     result.push({
       path,
       name: file.name,
@@ -72,10 +87,18 @@ const parseWaitFreezesKey = (fileName: string): string | null => {
   return `${timestamp}.${ms.padEnd(3, '0')}_${rest}`
 }
 
-export const collectDebugAssetsFromFiles = async (files: Iterable<File>): Promise<CollectedDebugAssets> => {
+export const collectDebugAssetsFromFiles = async (
+  files: Iterable<File>,
+  budget = createBrowserInputBudget(),
+): Promise<CollectedDebugAssets> => {
   const errorImages = new Map<string, string>()
   const visionImages = new Map<string, string>()
   const waitFreezesImages = new Map<string, string>()
+  const selectedImages: Array<{
+    file: File
+    key: string
+    target: Map<string, string>
+  }> = []
 
   for (const file of files) {
     const rawPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
@@ -84,22 +107,34 @@ export const collectDebugAssetsFromFiles = async (files: Iterable<File>): Promis
 
     if ((lower.includes('/on_error/') || lower.startsWith('on_error/')) && lower.endsWith('.png')) {
       const key = parseErrorImageKey(file.name)
-      if (key) replaceBlobUrl(errorImages, key, file)
+      if (key) {
+        registerBrowserInputFile(budget, file, rawPath)
+        chargeBrowserInputFile(budget, file, { image: true })
+        selectedImages.push({ file, key, target: errorImages })
+      }
       continue
     }
 
     if ((lower.includes('/vision/') || lower.startsWith('vision/')) && lower.endsWith('.jpg')) {
       const waitFreezesKey = parseWaitFreezesKey(file.name)
       if (waitFreezesKey) {
-        replaceBlobUrl(waitFreezesImages, waitFreezesKey, file)
+        registerBrowserInputFile(budget, file, rawPath)
+        chargeBrowserInputFile(budget, file, { image: true })
+        selectedImages.push({ file, key: waitFreezesKey, target: waitFreezesImages })
         continue
       }
 
       const visionKey = parseVisionImageKey(file.name)
       if (visionKey) {
-        replaceBlobUrl(visionImages, visionKey, file)
+        registerBrowserInputFile(budget, file, rawPath)
+        chargeBrowserInputFile(budget, file, { image: true })
+        selectedImages.push({ file, key: visionKey, target: visionImages })
       }
     }
+  }
+
+  for (const image of selectedImages) {
+    replaceBlobUrl(image.target, image.key, image.file)
   }
 
   return {
@@ -125,7 +160,10 @@ const getFileFromEntry = (fileEntry: FileSystemFileEntry, relativePath: string):
   })
 }
 
-const readDirectoryEntries = (reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> => {
+const readDirectoryEntries = (
+  reader: FileSystemDirectoryReader,
+  onEntry: (entry: FileSystemEntry) => void,
+): Promise<FileSystemEntry[]> => {
   return new Promise((resolve, reject) => {
     const entries: FileSystemEntry[] = []
 
@@ -135,7 +173,10 @@ const readDirectoryEntries = (reader: FileSystemDirectoryReader): Promise<FileSy
           resolve(entries)
           return
         }
-        entries.push(...batch)
+        for (const entry of batch) {
+          onEntry(entry)
+          entries.push(entry)
+        }
         readBatch()
       }, reject)
     }
@@ -147,17 +188,26 @@ const readDirectoryEntries = (reader: FileSystemDirectoryReader): Promise<FileSy
 export const readDirectoryFiles = async (
   dirEntry: FileSystemDirectoryEntry,
   relativePrefix = '',
+  budget: BrowserInputBudget = createBrowserInputBudget(),
+  depth = 0,
 ): Promise<File[]> => {
+  if (depth > BROWSER_INPUT_MAX_DIRECTORY_DEPTH) {
+    registerBrowserInputEntry(budget, relativePrefix || dirEntry.name, depth)
+  }
   const reader = dirEntry.createReader()
-  const entries = await readDirectoryEntries(reader)
+  const entries = await readDirectoryEntries(reader, (entry) => {
+    registerBrowserInputEntry(budget, `${relativePrefix}${entry.name}`, depth)
+  })
   const files: File[] = []
 
   for (const entry of entries) {
     if (entry.isFile) {
-      files.push(await getFileFromEntry(
+      const file = await getFileFromEntry(
         entry as FileSystemFileEntry,
         `${relativePrefix}${entry.name}`,
-      ))
+      )
+      budget.registeredFiles.add(file)
+      files.push(file)
       continue
     }
 
@@ -165,6 +215,8 @@ export const readDirectoryFiles = async (
       const nestedFiles = await readDirectoryFiles(
         entry as FileSystemDirectoryEntry,
         `${relativePrefix}${entry.name}/`,
+        budget,
+        depth + 1,
       )
       files.push(...nestedFiles)
     }

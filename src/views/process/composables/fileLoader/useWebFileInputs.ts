@@ -17,6 +17,12 @@ import {
   collectMxuZipVolumes,
   findMxuZipVolumes,
 } from '../../../../utils/mxuZipVolumes'
+import {
+  chargeBrowserInputFile,
+  createBrowserInputBudget,
+  registerBrowserInputFile,
+  type BrowserInputBudget,
+} from '../../../../utils/browserInputBudget'
 
 const getFileRelativePath = (file: File): string => {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
@@ -39,8 +45,12 @@ const getMxuZipUpload = (files: File[], anchor: File): File | File[] => {
 const resolveSelectedLogContent = async (
   files: Iterable<File>,
   selectPrimaryLogs: UseProcessFileLoaderOptions['selectPrimaryLogs'],
+  budget: BrowserInputBudget,
 ) => {
   const fileList = Array.from(files)
+  for (const file of fileList) {
+    registerBrowserInputFile(budget, file, getFileRelativePath(file))
+  }
   const selectedLogs = selectPrimaryLogGroup(
     fileList.map(file => ({
       file,
@@ -79,13 +89,15 @@ const resolveSelectedLogContent = async (
   }
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
 
-  const loadedLogs = await Promise.all(selectedLogs
-    .filter(({ item }) => selectedPaths.has(item.path))
-    .map(async ({ item }) => ({
-      name: item.name,
-      path: item.path,
-      content: await item.file.text(),
-    })))
+  const selectedLogItems = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+  for (const { item } of selectedLogItems) {
+    chargeBrowserInputFile(budget, item.file)
+  }
+  const loadedLogs = await Promise.all(selectedLogItems.map(async ({ item }) => ({
+    name: item.name,
+    path: item.path,
+    content: await item.file.text(),
+  })))
 
   return {
     content: '',
@@ -105,8 +117,9 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
       setFileLoading(true)
       options.onFileLoadingStart()
 
-      const files = await readDirectoryFiles(dirEntry)
-      const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs)
+      const budget = createBrowserInputBudget()
+      const files = await readDirectoryFiles(dirEntry, '', budget)
+      const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs, budget)
       if (cancelled) return
       if (primaryLogFiles.length === 0) {
         const volumes = findMxuZipVolumes(files)
@@ -121,8 +134,8 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
         return
       }
 
-      const textFiles = await collectTextFilesFromFiles(scopedFiles)
-      const debugAssets = await collectDebugAssetsFromFiles(scopedFiles)
+      const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+      const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
       options.onUploadContent(
         '',
         debugAssets.errorImages,
@@ -179,7 +192,8 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
       setFileLoading(true)
       options.onFileLoadingStart()
 
-      const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs)
+      const budget = createBrowserInputBudget()
+      const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs, budget)
       if (cancelled) return
       if (primaryLogFiles.length === 0) {
         const volumes = findMxuZipVolumes(files)
@@ -194,8 +208,8 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
         return
       }
 
-      const textFiles = await collectTextFilesFromFiles(scopedFiles)
-      const debugAssets = await collectDebugAssetsFromFiles(scopedFiles)
+      const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+      const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
       options.onUploadContent(
         '',
         debugAssets.errorImages,

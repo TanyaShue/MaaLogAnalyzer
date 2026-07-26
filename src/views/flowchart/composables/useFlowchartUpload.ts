@@ -22,6 +22,12 @@ import {
   createTauriArchiveResourceOwner,
   releaseTauriArchiveResource,
 } from '../../../utils/tauriArchiveResources'
+import {
+  chargeBrowserInputFile,
+  createBrowserInputBudget,
+  registerBrowserInputFile,
+  type BrowserInputBudget,
+} from '../../../utils/browserInputBudget'
 
 interface UseFlowchartUploadOptions {
   onUploadFile: (file: File | File[]) => void
@@ -113,8 +119,14 @@ export const useFlowchartUpload = ({
     })
   }
 
-  const resolveSelectedLogContentFromFiles = async (files: Iterable<File>) => {
+  const resolveSelectedLogContentFromFiles = async (
+    files: Iterable<File>,
+    budget: BrowserInputBudget,
+  ) => {
     const fileList = Array.from(files)
+    for (const file of fileList) {
+      registerBrowserInputFile(budget, file, getFileRelativePath(file))
+    }
     const selectedLogs = selectPrimaryLogGroup(
       fileList.map(file => ({
         name: file.name,
@@ -130,6 +142,9 @@ export const useFlowchartUpload = ({
       }
     }
 
+    for (const { item } of selectedLogs) {
+      chargeBrowserInputFile(budget, item.file)
+    }
     const loadedLogs = await Promise.all(selectedLogs.map(async ({ item }) => ({
       name: item.name,
       path: item.path,
@@ -212,7 +227,8 @@ export const useFlowchartUpload = ({
     const files = input.files
     if (!files || files.length === 0) return
 
-    const { scopedFiles, primaryLogFiles } = await resolveSelectedLogContentFromFiles(files)
+    const budget = createBrowserInputBudget()
+    const { scopedFiles, primaryLogFiles } = await resolveSelectedLogContentFromFiles(files, budget)
     if (primaryLogFiles.length === 0) {
       const volumes = findMxuZipVolumes(files)
       if (volumes.length > 0) {
@@ -232,6 +248,13 @@ export const useFlowchartUpload = ({
     for (const file of scopedFiles) {
       const name = file.name.toLowerCase()
       if (name.endsWith('.png') || name.endsWith('.jpg')) {
+        chargeBrowserInputFile(budget, file, { image: true })
+      }
+    }
+
+    for (const file of scopedFiles) {
+      const name = file.name.toLowerCase()
+      if (name.endsWith('.png') || name.endsWith('.jpg')) {
         const baseName = file.name.replace(/\.(png|jpg)$/i, '')
         if (baseName.endsWith('_wait_freezes')) {
           replaceBlobUrl(waitFreezesImages, baseName, file)
@@ -244,7 +267,7 @@ export const useFlowchartUpload = ({
     }
 
     if (primaryLogFiles.length > 0) {
-      const textFiles = await collectTextFilesFromFiles(scopedFiles)
+      const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
       await emitUploadContent('', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles)
     }
     input.value = ''
