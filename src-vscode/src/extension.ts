@@ -257,9 +257,12 @@ export function activate(context: vscode.ExtensionContext) {
 
   const analyzeFileCommand = vscode.commands.registerCommand(
     'maaLogAnalyzer.analyzeFile',
-    async (uri: vscode.Uri) => {
+    async (uri?: vscode.Uri) => {
+      const targetUri = uri ?? getActiveFileUri() ?? await pickFileUriForAnalysis()
+      if (!targetUri) return
+
       createOrShowPanel(context)
-      await analyzeFileUri(uri)
+      await analyzeFileUri(targetUri)
     }
   )
 
@@ -497,6 +500,24 @@ async function analyzeFileUri(uri: vscode.Uri): Promise<void> {
     vscode.window.showErrorMessage(`无法读取文件: ${error}`)
   }
 }
+
+function getActiveFileUri(): vscode.Uri | undefined {
+  const uri = vscode.window.activeTextEditor?.document.uri
+  return uri?.scheme === 'file' ? uri : undefined
+}
+
+async function pickFileUriForAnalysis(): Promise<vscode.Uri | undefined> {
+  const selected = await vscode.window.showOpenDialog({
+    canSelectMany: false,
+    canSelectFolders: false,
+    canSelectFiles: true,
+    filters: { 'Log Files': ['log', 'jsonl', 'txt', 'zip'] },
+    title: t('Select Log File', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6'),
+  })
+
+  return selected?.[0]
+}
+
 async function pickUriForAnalysis(): Promise<vscode.Uri | undefined> {
   const choice = await vscode.window.showQuickPick(
     [
@@ -512,14 +533,15 @@ async function pickUriForAnalysis(): Promise<vscode.Uri | undefined> {
 
   if (!choice) return undefined
 
+  if (choice.value === 'file') {
+    return pickFileUriForAnalysis()
+  }
+
   const selected = await vscode.window.showOpenDialog({
     canSelectMany: false,
-    canSelectFolders: choice.value === 'folder',
-    canSelectFiles: choice.value === 'file',
-    filters: choice.value === 'file' ? { 'Log Files': ['log', 'jsonl', 'txt', 'zip'] } : undefined,
-    title: choice.value === 'file'
-      ? t('Select Log File', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6')
-      : t('Select Log Folder', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6\u5939'),
+    canSelectFolders: true,
+    canSelectFiles: false,
+    title: t('Select Log Folder', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6\u5939'),
   })
 
   return selected?.[0]
