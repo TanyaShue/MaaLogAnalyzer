@@ -14,8 +14,10 @@ import { ArchiveLimitError } from './archiveLimits'
 import {
   InputResourceLimitError,
   chargeInputResourceBytes,
+  createBrowserInputBudget,
   createInputResourceBudget,
   registerInputResourceEntry,
+  type BrowserInputBudget,
   type InputResourceBudget,
 } from './browserInputBudget'
 import {
@@ -94,6 +96,24 @@ export const assertTauriDirectory = async (path: string) => {
   if (!info.isDirectory || info.isSymlink) {
     throw new InputResourceLimitError('所选目录包含不受支持的目录链接')
   }
+}
+
+const chargeWebRegularFile = (
+  file: File,
+  path: string,
+  budget: BrowserInputBudget,
+  options: { image?: boolean } = {},
+) => {
+  const normalizedPath = toPosixPath(path)
+  if (budget.chargedPaths.has(normalizedPath)) return
+  chargeInputResourceBytes(budget, file.size, options)
+  budget.chargedPaths.add(normalizedPath)
+}
+
+interface WebDirectoryLocation {
+  handle: FileSystemDirectoryHandle
+  path: string
+  depth: number
 }
 
 const normalizeLoadedPath = (rawPath: string, rootPath?: string) => {
@@ -202,6 +222,9 @@ async function openLogFileWithWeb(): Promise<string | null> {
       const file = (e.target as HTMLInputElement).files?.[0]
       if (file) {
         try {
+          const budget = createBrowserInputBudget()
+          registerInputResourceEntry(budget, file.name, 0)
+          chargeWebRegularFile(file, file.name, budget)
           const content = await file.text()
           resolve(content)
         } catch (error) {
@@ -448,29 +471,40 @@ async function collectTextFilesTauri(
   return result
 }
 
-async function collectTextFilesWeb(rootHandle: FileSystemDirectoryHandle): Promise<LoadedTextFile[]> {
+async function collectTextFilesWeb(
+  root: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<LoadedTextFile[]> {
   const result: LoadedTextFile[] = []
   const seen = new Set<string>()
 
-  const walk = async (handle: FileSystemDirectoryHandle, prefix: string) => {
-    for await (const entry of handle.values()) {
-      const nextPath = prefix ? `${prefix}/${entry.name}` : entry.name
+  const walk = async (location: WebDirectoryLocation, relativePrefix: string) => {
+    registerInputResourceEntry(budget, location.path, location.depth)
+    for await (const entry of location.handle.values()) {
+      const nextPath = `${location.path}/${entry.name}`
+      const nextRelativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name
+      registerInputResourceEntry(budget, nextPath, location.depth + 1)
       if (entry.kind === 'directory') {
-        await walk(entry as FileSystemDirectoryHandle, nextPath)
+        await walk({
+          handle: entry as FileSystemDirectoryHandle,
+          path: nextPath,
+          depth: location.depth + 1,
+        }, nextRelativePath)
         continue
       }
       if (!isTextSearchFileName(entry.name)) continue
       if (shouldSkipCollectedTextFile(entry.name)) continue
-      const path = normalizeLoadedPath(nextPath) || entry.name
+      const path = normalizeLoadedPath(nextRelativePath) || entry.name
       if (seen.has(path)) continue
       seen.add(path)
       const file = await (entry as FileSystemFileHandle).getFile()
+      chargeWebRegularFile(file, nextPath, budget)
       const content = await file.text()
       result.push({ path, name: entry.name, content })
     }
   }
 
-  await walk(rootHandle, '')
+  await walk(root, '')
   return result
 }
 
@@ -525,30 +559,49 @@ async function readPrimaryLogFilesTauri(
 }
 
 async function listPrimaryLogFilesWeb(
-  dirHandle: FileSystemDirectoryHandle,
-): Promise<Array<{ path: string; name: string; handle: FileSystemFileHandle }>> {
-  const result: Array<{ path: string; name: string; handle: FileSystemFileHandle }> = []
-  for await (const entry of dirHandle.values()) {
+  location: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<Array<{
+  path: string
+  name: string
+  resourcePath: string
+  handle: FileSystemFileHandle
+}>> {
+  const result: Array<{
+    path: string
+    name: string
+    resourcePath: string
+    handle: FileSystemFileHandle
+  }> = []
+  registerInputResourceEntry(budget, location.path, location.depth)
+  for await (const entry of location.handle.values()) {
+    const resourcePath = `${location.path}/${entry.name}`
+    registerInputResourceEntry(budget, resourcePath, location.depth + 1)
     if (entry.kind !== 'file') continue
     if (!isPrimaryLogFileName(entry.name)) continue
     result.push({
       path: entry.name,
       name: entry.name,
+      resourcePath,
       handle: entry as FileSystemFileHandle,
     })
   }
   return result
 }
 
-async function hasPrimaryLogInWeb(dirHandle: FileSystemDirectoryHandle): Promise<boolean> {
-  return (await listPrimaryLogFilesWeb(dirHandle)).length > 0
+async function hasPrimaryLogInWeb(
+  location: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<boolean> {
+  return (await listPrimaryLogFilesWeb(location, budget)).length > 0
 }
 
 async function readPrimaryLogFilesWeb(
-  dirHandle: FileSystemDirectoryHandle,
+  location: WebDirectoryLocation,
+  budget: BrowserInputBudget,
   selectPrimaryLogs?: OpenFolderDialogOptions['selectPrimaryLogs'],
 ): Promise<LoadedPrimaryLogFile[] | null> {
-  const selectedLogs = selectPrimaryLogGroup(await listPrimaryLogFilesWeb(dirHandle))
+  const selectedLogs = selectPrimaryLogGroup(await listPrimaryLogFilesWeb(location, budget))
   if (selectedLogs.length === 0) return []
   const selectedOptions = selectPrimaryLogs
     ? await selectPrimaryLogs(createPrimaryLogSelectionOptions(selectedLogs.map(({ item }) => item)))
@@ -557,13 +610,18 @@ async function readPrimaryLogFilesWeb(
   if (selectedOptions.length === 0) return []
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
 
-  const loadedLogs = await Promise.all(selectedLogs
-    .filter(({ item }) => selectedPaths.has(item.path))
-    .map(async ({ item }) => ({
-      path: item.path,
-      name: item.name,
-      content: await (await item.handle.getFile()).text(),
-    })))
+  const selectedLogItems = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+  const selectedFiles: Array<{ item: typeof selectedLogItems[number]['item']; file: File }> = []
+  for (const { item } of selectedLogItems) {
+    const file = await item.handle.getFile()
+    chargeWebRegularFile(file, item.resourcePath, budget)
+    selectedFiles.push({ item, file })
+  }
+  const loadedLogs = await Promise.all(selectedFiles.map(async ({ item, file }) => ({
+    path: item.path,
+    name: item.name,
+    content: await file.text(),
+  })))
 
   return sortLoadedPrimaryLogSegments(loadedLogs)
 }
@@ -701,38 +759,81 @@ async function readWaitFreezesImages(
 /**
  * Web 版本：递归查找 debug 文件夹
  */
-async function findDebugFolderWeb(dirHandle: FileSystemDirectoryHandle): Promise<FileSystemDirectoryHandle | null> {
+async function findDebugFolderWeb(
+  location: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<WebDirectoryLocation | null> {
   try {
     // 检查当前目录下是否有 debug 文件夹
     try {
-      const debugHandle = await dirHandle.getDirectoryHandle('debug')
-      return debugHandle
-    } catch {
+      const handle = await location.handle.getDirectoryHandle('debug')
+      const debugLocation = {
+        handle,
+        path: `${location.path}/debug`,
+        depth: location.depth + 1,
+      }
+      registerInputResourceEntry(budget, debugLocation.path, debugLocation.depth)
+      if (await hasPrimaryLogInWeb(debugLocation, budget)) return debugLocation
+    } catch (error) {
+      if (isInputResourceLimitError(error)) throw error
       // debug 不存在，继续递归查找
     }
 
     // 递归查找子文件夹
-    for await (const entry of dirHandle.values()) {
+    for await (const entry of location.handle.values()) {
+      const nextPath = `${location.path}/${entry.name}`
+      registerInputResourceEntry(budget, nextPath, location.depth + 1)
       if (entry.kind === 'directory') {
-        const found = await findDebugFolderWeb(entry as FileSystemDirectoryHandle)
+        const found = await findDebugFolderWeb({
+          handle: entry as FileSystemDirectoryHandle,
+          path: nextPath,
+          depth: location.depth + 1,
+        }, budget)
         if (found) return found
       }
     }
   } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     console.error('[查找debug] 错误:', error)
   }
   return null
 }
 
+type WebImageFiles = Map<string, File>
+
+const createWebImageUrlMap = (files: WebImageFiles): Map<string, string> => {
+  const result = new Map<string, string>()
+  try {
+    for (const [key, file] of files) replaceBlobUrl(result, key, file)
+    return result
+  } catch (error) {
+    for (const url of result.values()) URL.revokeObjectURL(url)
+    throw error
+  }
+}
+
+const revokeWebImageUrlMaps = (maps: Array<Map<string, string>>) => {
+  for (const map of maps) {
+    for (const url of map.values()) URL.revokeObjectURL(url)
+  }
+}
+
 /**
  * Web 版本：读取 on_error 文件夹中的截图
  */
-async function readErrorImagesWeb(debugHandle: FileSystemDirectoryHandle): Promise<Map<string, string>> {
-  const imageMap = new Map<string, string>()
+async function readErrorImagesWeb(
+  debugLocation: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<WebImageFiles> {
+  const imageMap = new Map<string, File>()
   try {
-    const onErrorHandle = await debugHandle.getDirectoryHandle('on_error')
+    const onErrorHandle = await debugLocation.handle.getDirectoryHandle('on_error')
+    const onErrorPath = `${debugLocation.path}/on_error`
+    registerInputResourceEntry(budget, onErrorPath, debugLocation.depth + 1)
 
     for await (const entry of onErrorHandle.values()) {
+      const resourcePath = `${onErrorPath}/${entry.name}`
+      registerInputResourceEntry(budget, resourcePath, debugLocation.depth + 2)
       if (entry.kind === 'file' && entry.name.endsWith('.png')) {
         const match = entry.name.match(/^(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2})\.(\d{1,3})_(.+)\.png$/)
         if (match) {
@@ -741,11 +842,13 @@ async function readErrorImagesWeb(debugHandle: FileSystemDirectoryHandle): Promi
           const paddedMs = ms.padEnd(3, '0')
           const key = `${timestamp}.${paddedMs}_${nodeName}`
           const file = await (entry as FileSystemFileHandle).getFile()
-          replaceBlobUrl(imageMap, key, file)
+          chargeWebRegularFile(file, resourcePath, budget, { image: true })
+          imageMap.set(key, file)
         }
       }
     }
-  } catch {
+  } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     // Optional debug image directory is absent.
   }
   return imageMap
@@ -754,21 +857,30 @@ async function readErrorImagesWeb(debugHandle: FileSystemDirectoryHandle): Promi
 /**
  * Web 版本：读取 vision 文件夹中的调试截图
  */
-async function readVisionImagesWeb(debugHandle: FileSystemDirectoryHandle): Promise<Map<string, string>> {
-  const imageMap = new Map<string, string>()
+async function readVisionImagesWeb(
+  debugLocation: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<WebImageFiles> {
+  const imageMap = new Map<string, File>()
   try {
-    const visionHandle = await debugHandle.getDirectoryHandle('vision')
+    const visionHandle = await debugLocation.handle.getDirectoryHandle('vision')
+    const visionPath = `${debugLocation.path}/vision`
+    registerInputResourceEntry(budget, visionPath, debugLocation.depth + 1)
 
     for await (const entry of visionHandle.values()) {
+      const resourcePath = `${visionPath}/${entry.name}`
+      registerInputResourceEntry(budget, resourcePath, debugLocation.depth + 2)
       if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.jpg')) {
         const key = parseVisionImageKey(entry.name)
         if (key != null) {
           const file = await (entry as FileSystemFileHandle).getFile()
-          replaceBlobUrl(imageMap, key, file)
+          chargeWebRegularFile(file, resourcePath, budget, { image: true })
+          imageMap.set(key, file)
         }
       }
     }
-  } catch {
+  } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     // Optional debug image directory is absent.
   }
   return imageMap
@@ -784,27 +896,31 @@ async function openFolderDialogWeb(options: OpenFolderDialogOptions): Promise<Op
       return null
     }
 
-    const dirHandle = await (window as any).showDirectoryPicker()
+    const dirHandle = await (window as any).showDirectoryPicker() as FileSystemDirectoryHandle
+    const budget = createBrowserInputBudget()
+    const rootLocation: WebDirectoryLocation = {
+      handle: dirHandle,
+      path: dirHandle.name || 'selected-folder',
+      depth: 0,
+    }
+    registerInputResourceEntry(budget, rootLocation.path, rootLocation.depth)
 
-    let debugHandle = dirHandle
+    let debugLocation = rootLocation
 
-    if (!(await hasPrimaryLogInWeb(dirHandle))) {
-      try {
-        debugHandle = await dirHandle.getDirectoryHandle('debug')
-        if (!(await hasPrimaryLogInWeb(debugHandle))) {
-          throw new Error('debug 不含日志')
-        }
-      } catch {
-        const found = await findDebugFolderWeb(dirHandle)
-        if (!found || !(await hasPrimaryLogInWeb(found))) {
-          toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-          return null
-        }
-        debugHandle = found
+    if (!(await hasPrimaryLogInWeb(rootLocation, budget))) {
+      const found = await findDebugFolderWeb(rootLocation, budget)
+      if (!found) {
+        toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+        return null
       }
+      debugLocation = found
     }
 
-    const primaryLogFiles = await readPrimaryLogFilesWeb(debugHandle, options.selectPrimaryLogs)
+    const primaryLogFiles = await readPrimaryLogFilesWeb(
+      debugLocation,
+      budget,
+      options.selectPrimaryLogs,
+    )
 
     if (primaryLogFiles == null) {
       return null
@@ -816,17 +932,30 @@ async function openFolderDialogWeb(options: OpenFolderDialogOptions): Promise<Op
     }
 
 
-    const errorImages = await readErrorImagesWeb(debugHandle)
-    const visionImages = await readVisionImagesWeb(debugHandle)
-    const waitFreezesImages = await readWaitFreezesImagesWeb(debugHandle)
+    const errorImageFiles = await readErrorImagesWeb(debugLocation, budget)
+    const visionImageFiles = await readVisionImagesWeb(debugLocation, budget)
+    const waitFreezesImageFiles = await readWaitFreezesImagesWeb(debugLocation, budget)
     let textFiles: LoadedTextFile[] = []
     try {
-      textFiles = await collectTextFilesWeb(debugHandle)
+      textFiles = await collectTextFilesWeb(debugLocation, budget)
     } catch (error) {
+      if (isInputResourceLimitError(error)) throw error
       console.warn('[文件夹] 收集文本文件失败(Web):', error)
     }
 
-    return { content: '', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles }
+    const createdImageMaps: Array<Map<string, string>> = []
+    try {
+      const errorImages = createWebImageUrlMap(errorImageFiles)
+      createdImageMaps.push(errorImages)
+      const visionImages = createWebImageUrlMap(visionImageFiles)
+      createdImageMaps.push(visionImages)
+      const waitFreezesImages = createWebImageUrlMap(waitFreezesImageFiles)
+      createdImageMaps.push(waitFreezesImages)
+      return { content: '', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles }
+    } catch (error) {
+      revokeWebImageUrlMaps(createdImageMaps)
+      throw error
+    }
   } catch (error) {
     console.error('[文件夹] 打开失败:', error)
     if ((error as Error).name === 'AbortError') {
@@ -839,21 +968,30 @@ async function openFolderDialogWeb(options: OpenFolderDialogOptions): Promise<Op
 /**
  * Web 版本：读取 vision 文件夹中的 wait_freezes 调试截图
  */
-async function readWaitFreezesImagesWeb(debugHandle: FileSystemDirectoryHandle): Promise<Map<string, string>> {
-  const imageMap = new Map<string, string>()
+async function readWaitFreezesImagesWeb(
+  debugLocation: WebDirectoryLocation,
+  budget: BrowserInputBudget,
+): Promise<WebImageFiles> {
+  const imageMap = new Map<string, File>()
   try {
-    const visionHandle = await debugHandle.getDirectoryHandle('vision')
+    const visionHandle = await debugLocation.handle.getDirectoryHandle('vision')
+    const visionPath = `${debugLocation.path}/vision`
+    registerInputResourceEntry(budget, visionPath, debugLocation.depth + 1)
 
     for await (const entry of visionHandle.values()) {
+      const resourcePath = `${visionPath}/${entry.name}`
+      registerInputResourceEntry(budget, resourcePath, debugLocation.depth + 2)
       if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.jpg')) {
         const key = parseWaitFreezesKey(entry.name)
         if (key != null) {
           const file = await (entry as FileSystemFileHandle).getFile()
-          replaceBlobUrl(imageMap, key, file)
+          chargeWebRegularFile(file, resourcePath, budget, { image: true })
+          imageMap.set(key, file)
         }
       }
     }
-  } catch {
+  } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     // Optional debug image directory is absent.
   }
   return imageMap
