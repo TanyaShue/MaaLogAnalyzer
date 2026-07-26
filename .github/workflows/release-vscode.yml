@@ -35,16 +35,21 @@ jobs:
 
       - name: Update version
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            ver=${{ github.ref_name }}
-            ver=${ver:1}
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+            tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+            if [[ ! "$tag" =~ $tag_pattern ]]; then
+              echo "Invalid release tag format" >&2
+              exit 1
+            fi
+            ver="${tag#v}"
           else
             desc=$(git describe --tags --long --match "v*" 2>/dev/null || echo "v0.0.1-0-g0000000")
             ver=$(echo "$desc" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g.*/\1-post.\2/')
           fi
           echo "Setting version to ${ver}"
-          npm pkg set version=${ver}
-          npm --prefix src-vscode pkg set version=${ver}
+          npm pkg set "version=${ver}"
+          npm --prefix src-vscode pkg set "version=${ver}"
 
       - name: Build webview
         run: pnpm build:vscode
