@@ -33,8 +33,9 @@ import {
 let currentPanel: vscode.WebviewPanel | undefined = undefined
 const loadOperationCoordinator = new LoadOperationCoordinator()
 const execFileAsync = promisify(execFile)
-const isZh = vscode.env.language.toLowerCase().startsWith('zh')
-const t = (en: string, zh: string) => (isZh ? zh : en)
+const t = (message: string, ...args: Array<string | number | boolean>) => (
+  vscode.l10n.t(message, ...args)
+)
 
 const PRIMARY_LOG_FILE_HINT = 'maa.log / maa.bak*.log / maafw.log / maafw.bak*.log'
 const MAIN_LOG_RE = /^(maa|maafw)\.log$/i
@@ -100,7 +101,7 @@ async function pickPrimaryLogSelection(
 
   const items: PrimaryLogQuickPickItem[] = sorted.map(entry => ({
     label: entry.name,
-    description: entry.kind === 'main' ? '当前日志' : '备份日志',
+    description: entry.kind === 'main' ? t('Current log') : t('Backup log'),
     detail: `${formatLogSize(entry.size)}${entry.rotatedTimestampHint ? ` · ${entry.rotatedTimestampHint}` : ''}`,
     picked: defaultPicked.has(entry.path),
     logPath: entry.path,
@@ -108,8 +109,8 @@ async function pickPrimaryLogSelection(
 
   const picked = await vscode.window.showQuickPick(items, {
     canPickMany: true,
-    title: `选择要加载的日志（默认 ${defaultPicked.size}/${entries.length}）`,
-    placeHolder: '勾选需要分析的日志；历史 bak 日志可按需加载',
+    title: t('Select logs to load (default {0}/{1})', defaultPicked.size, entries.length),
+    placeHolder: t('Select logs to analyze; historical backup logs can be loaded as needed'),
     ignoreFocusOut: true,
   })
 
@@ -253,13 +254,13 @@ class SidebarActionProvider implements vscode.TreeDataProvider<SidebarActionItem
 
   getChildren(): SidebarActionItem[] {
     const items: SidebarActionItem[] = [
-      new SidebarActionItem(t('Open Analyzer', '\u6253\u5f00\u5206\u6790\u9762\u677f'), 'maaLogAnalyzer.openAnalyzer', 'openAnalyzer'),
-      new SidebarActionItem(t('Analyze File/Folder', '\u9009\u62e9\u6587\u4ef6/\u6587\u4ef6\u5939\u5e76\u5206\u6790'), 'maaLogAnalyzer.analyzeFolder', 'analyzeFolder'),
+      new SidebarActionItem(t('Open Analyzer'), 'maaLogAnalyzer.openAnalyzer', 'openAnalyzer'),
+      new SidebarActionItem(t('Analyze File/Folder'), 'maaLogAnalyzer.analyzeFolder', 'analyzeFolder'),
     ]
     if (process.platform === 'win32') {
       items.push(
-        new SidebarActionItem(t('Install Windows Context Menu', '\u5b89\u88c5\u7cfb\u7edf\u53f3\u952e\u83dc\u5355'), 'maaLogAnalyzer.installContextMenu', 'installContextMenu'),
-        new SidebarActionItem(t('Uninstall Windows Context Menu', '\u5378\u8f7d\u7cfb\u7edf\u53f3\u952e\u83dc\u5355'), 'maaLogAnalyzer.uninstallContextMenu', 'uninstallContextMenu'),
+        new SidebarActionItem(t('Install Windows Context Menu'), 'maaLogAnalyzer.installContextMenu', 'installContextMenu'),
+        new SidebarActionItem(t('Uninstall Windows Context Menu'), 'maaLogAnalyzer.uninstallContextMenu', 'uninstallContextMenu'),
       )
     }
     return items
@@ -342,24 +343,18 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (result.status === 'invalid') {
           vscode.window.showWarningMessage(
-            t(
-              'Rejected an invalid external analysis request.',
-              '\u5df2\u62d2\u7edd\u65e0\u6548\u7684\u5916\u90e8\u5206\u6790\u8bf7\u6c42\u3002',
-            ),
+            t('Rejected an invalid external analysis request.'),
           )
         } else if (result.status === 'type-mismatch') {
           const expected = result.request.route === 'analyze-file'
-            ? t('a log file', '\u65e5\u5fd7\u6587\u4ef6')
-            : t('a log folder', '\u65e5\u5fd7\u6587\u4ef6\u5939')
+            ? t('a log file')
+            : t('a log folder')
           vscode.window.showErrorMessage(
-            t(
-              `The approved path is not ${expected}.`,
-              `\u5df2\u6279\u51c6\u7684\u8def\u5f84\u4e0d\u662f${expected}\u3002`,
-            ),
+            t('The approved path is not {0}.', expected),
           )
         }
       } catch (error) {
-        vscode.window.showErrorMessage(`无法处理外部打开请求: ${error}`)
+        vscode.window.showErrorMessage(t('Unable to handle external open request: {0}', String(error)))
       }
     },
   })
@@ -368,28 +363,16 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function confirmExternalAnalysisRequest(request: ExternalAnalysisRequest): Promise<boolean> {
-  const approveLabel = t('Open and Analyze', '\u6253\u5f00\u5e76\u5206\u6790')
+  const approveLabel = t('Open and Analyze')
   const targetKind = request.route === 'analyze-file'
-    ? t('file', '\u6587\u4ef6')
-    : t('folder', '\u6587\u4ef6\u5939')
+    ? t('file')
+    : t('folder')
   const message = request.isUnc
-    ? t(
-        `An external application requested access to a network ${targetKind}.`,
-        `\u5916\u90e8\u5e94\u7528\u8bf7\u6c42\u8bbf\u95ee\u7f51\u7edc${targetKind}\u3002`,
-      )
-    : t(
-        `An external application requested access to a local ${targetKind}.`,
-        `\u5916\u90e8\u5e94\u7528\u8bf7\u6c42\u8bbf\u95ee\u672c\u5730${targetKind}\u3002`,
-      )
+    ? t('An external application requested access to a network {0}.', targetKind)
+    : t('An external application requested access to a local {0}.', targetKind)
   const detail = request.isUnc
-    ? t(
-        `Network path: ${request.targetPath}\n\nThis can contact a remote server. Continue only if you trust the application and network location that sent this request.`,
-        `\u7f51\u7edc\u8def\u5f84\uff1a${request.targetPath}\n\n\u8be5\u64cd\u4f5c\u53ef\u80fd\u8fde\u63a5\u8fdc\u7a0b\u670d\u52a1\u5668\u3002\u4ec5\u5f53\u4f60\u4fe1\u4efb\u53d1\u8d77\u8bf7\u6c42\u7684\u5e94\u7528\u548c\u7f51\u7edc\u4f4d\u7f6e\u65f6\u7ee7\u7eed\u3002`,
-      )
-    : t(
-        `Path: ${request.targetPath}\n\nContinue only if you initiated or trust this request.`,
-        `\u8def\u5f84\uff1a${request.targetPath}\n\n\u4ec5\u5f53\u8be5\u8bf7\u6c42\u7531\u4f60\u53d1\u8d77\u6216\u6765\u6e90\u53ef\u4fe1\u65f6\u7ee7\u7eed\u3002`,
-      )
+    ? t('Network path: {0}\n\nThis can contact a remote server. Continue only if you trust the application and network location that sent this request.', request.targetPath)
+    : t('Path: {0}\n\nContinue only if you initiated or trust this request.', request.targetPath)
 
   const action = await vscode.window.showWarningMessage(
     message,
@@ -421,7 +404,7 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
   // 创建新面板
   currentPanel = vscode.window.createWebviewPanel(
     'maaLogAnalyzer',
-    'MAA 日志分析器',
+    t('MAA Log Analyzer'),
     column || vscode.ViewColumn.One,
     {
       enableScripts: true,
@@ -452,9 +435,9 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
           const fileUri = await vscode.window.showOpenDialog({
             canSelectMany: false,
             filters: {
-              'Log Files': ['log', 'jsonl', 'txt', 'zip']
+              [t('Log Files')]: ['log', 'jsonl', 'txt', 'zip']
             },
-            title: '选择日志文件'
+            title: t('Select Log File')
           })
 
           if (fileUri && fileUri[0]) {
@@ -469,7 +452,7 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
             canSelectMany: false,
             canSelectFolders: true,
             canSelectFiles: false,
-            title: t('Select Log Folder', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6\u5939'),
+            title: t('Select Log Folder'),
           })
 
           if (folderUri && folderUri[0]) {
@@ -494,13 +477,13 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
 
         case 'openMseCrop': {
           if (typeof message.image !== 'string' || !message.image.startsWith('data:image/')) {
-            vscode.window.showErrorMessage('无法打开 MSE 截图工具: 图片数据无效')
+            vscode.window.showErrorMessage(t('Unable to open MSE crop tool: invalid image data'))
             break
           }
 
           const mseExtension = vscode.extensions.getExtension('nekosu.maa-support')
           if (!mseExtension) {
-            vscode.window.showWarningMessage('未安装或未启用 Maa Pipeline Support 插件')
+            vscode.window.showWarningMessage(t('Maa Pipeline Support is not installed or enabled'))
             break
           }
 
@@ -513,10 +496,10 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
                 : undefined,
             })
             if (result?.imageAccepted !== true) {
-              vscode.window.showWarningMessage('当前 Maa Pipeline Support 版本不支持接收图片，请更新后重试')
+              vscode.window.showWarningMessage(t('The current Maa Pipeline Support version cannot receive images. Update it and try again.'))
             }
           } catch (error) {
-            vscode.window.showErrorMessage(`无法打开 MSE 截图工具: ${error}`)
+            vscode.window.showErrorMessage(t('Unable to open MSE crop tool: {0}', String(error)))
           }
           break
         }
@@ -580,7 +563,7 @@ async function analyzeFileUri(
       waitFreezesImages: debugAssets.waitFreezesImages,
     })
   } catch (error) {
-    showLoadError('无法读取文件', error, operation)
+    showLoadError(t('Unable to read file'), error, operation)
   }
 }
 
@@ -594,8 +577,8 @@ async function pickFileUriForAnalysis(): Promise<vscode.Uri | undefined> {
     canSelectMany: false,
     canSelectFolders: false,
     canSelectFiles: true,
-    filters: { 'Log Files': ['log', 'jsonl', 'txt', 'zip'] },
-    title: t('Select Log File', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6'),
+    filters: { [t('Log Files')]: ['log', 'jsonl', 'txt', 'zip'] },
+    title: t('Select Log File'),
   })
 
   return selected?.[0]
@@ -604,12 +587,12 @@ async function pickFileUriForAnalysis(): Promise<vscode.Uri | undefined> {
 async function pickUriForAnalysis(): Promise<vscode.Uri | undefined> {
   const choice = await vscode.window.showQuickPick(
     [
-      { label: t('Log File', '\u65e5\u5fd7\u6587\u4ef6'), value: 'file' as const },
-      { label: t('Log Folder', '\u65e5\u5fd7\u6587\u4ef6\u5939'), value: 'folder' as const },
+      { label: t('Log File'), value: 'file' as const },
+      { label: t('Log Folder'), value: 'folder' as const },
     ],
     {
-      title: t('Choose what to analyze', '\u9009\u62e9\u8981\u5206\u6790\u7684\u7c7b\u578b'),
-      placeHolder: t('Select file or folder', '\u9009\u62e9\u6587\u4ef6\u6216\u6587\u4ef6\u5939'),
+      title: t('Choose what to analyze'),
+      placeHolder: t('Select file or folder'),
       ignoreFocusOut: true,
     },
   )
@@ -624,7 +607,7 @@ async function pickUriForAnalysis(): Promise<vscode.Uri | undefined> {
     canSelectMany: false,
     canSelectFolders: true,
     canSelectFiles: false,
-    title: t('Select Log Folder', '\u9009\u62e9\u65e5\u5fd7\u6587\u4ef6\u5939'),
+    title: t('Select Log Folder'),
   })
 
   return selected?.[0]
@@ -694,7 +677,7 @@ async function analyzeFolderUri(
         await handleZipFile(splitZipUri, operation)
         return
       }
-      vscode.window.showErrorMessage(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+      vscode.window.showErrorMessage(t('No log file was found in the folder ({0})', PRIMARY_LOG_FILE_HINT))
       return
     }
 
@@ -718,7 +701,7 @@ async function analyzeFolderUri(
     const selectionEntryByPath = new Map(selectionEntries.map(entry => [entry.path, entry]))
     const plannedLogEntries = selectedLogEntries.map(({ item }) => {
       const selectionEntry = selectionEntryByPath.get(item.path)
-      if (!selectionEntry) throw new Error(`缺少日志文件元数据: ${item.path}`)
+      if (!selectionEntry) throw new Error(t('Missing log file metadata: {0}', item.path))
       return createStoredEntryMetadata(item.path, selectionEntry.size)
     })
     assertExtractedEntriesWithinLimits(plannedLogEntries)
@@ -744,7 +727,7 @@ async function analyzeFolderUri(
     const primaryLogFiles = sortLoadedPrimaryLogSegments(loadedSegments)
 
     if (primaryLogFiles.length === 0) {
-      vscode.window.showErrorMessage('未能读取到有效日志内容')
+      vscode.window.showErrorMessage(t('No valid log content could be read'))
       return
     }
 
@@ -778,7 +761,7 @@ async function analyzeFolderUri(
       waitFreezesImages: debugAssets.waitFreezesImages,
     })
   } catch (error) {
-    showLoadError('无法读取文件夹', error, operation)
+    showLoadError(t('Unable to read folder'), error, operation)
   }
 }
 
@@ -948,16 +931,17 @@ async function prepareContextMenuAssets(context: vscode.ExtensionContext): Promi
 
 async function installWindowsContextMenu(context: vscode.ExtensionContext): Promise<void> {
   if (process.platform !== 'win32') {
-    vscode.window.showWarningMessage('该功能仅支持 Windows')
+    vscode.window.showWarningMessage(t('This feature is available only on Windows'))
     return
   }
 
+  const installLabel = t('Install')
   const action = await vscode.window.showInformationMessage(
-    '将安装 Windows 右键菜单（文件夹、文件夹空白处、.log、.zip）：用 MAA Log Analyzer 分析。是否继续？',
-    '安装',
-    '取消',
+    t('This will install Windows context menu entries for folders, folder backgrounds, .log files, and .zip files. Continue?'),
+    installLabel,
+    t('Cancel'),
   )
-  if (action !== '安装') return
+  if (action !== installLabel) return
   const entries: Array<{ menuKey: string; arg: string }> = [
     { menuKey: WINDOWS_CONTEXT_MENU_KEYS[0], arg: '%1' },
     { menuKey: WINDOWS_CONTEXT_MENU_KEYS[1], arg: '%V' },
@@ -969,34 +953,36 @@ async function installWindowsContextMenu(context: vscode.ExtensionContext): Prom
     const wscriptExe = (process.env.WINDIR || 'C:\\Windows') + '\\System32\\wscript.exe'
     const { helperScript, iconPath } = await prepareContextMenuAssets(context)
     const uriScheme = normalizeEditorUriScheme(vscode.env.uriScheme)
+    const menuLabel = t('Analyze with MAA Log Analyzer')
 
     for (const entry of entries) {
       const commandKey = `${entry.menuKey}\\command`
       const command = `"${wscriptExe}" "${helperScript}" "${entry.arg}" "${uriScheme}"`
 
-      await execReg(['add', entry.menuKey, '/ve', '/d', '用 MAA Log Analyzer 分析', '/f'])
+      await execReg(['add', entry.menuKey, '/ve', '/d', menuLabel, '/f'])
       await execReg(['add', entry.menuKey, '/v', 'Icon', '/d', iconPath, '/f'])
       await execReg(['add', commandKey, '/ve', '/d', command, '/f'])
     }
 
-    vscode.window.showInformationMessage('已安装 Windows 右键菜单（文件夹/空白处/.log/.zip）')
+    vscode.window.showInformationMessage(t('Windows context menu entries were installed'))
   } catch (error) {
-    vscode.window.showErrorMessage(`安装右键菜单失败: ${error}`)
+    vscode.window.showErrorMessage(t('Failed to install Windows context menu entries: {0}', String(error)))
   }
 }
 
 async function uninstallWindowsContextMenu(context: vscode.ExtensionContext): Promise<void> {
   if (process.platform !== 'win32') {
-    vscode.window.showWarningMessage('该功能仅支持 Windows')
+    vscode.window.showWarningMessage(t('This feature is available only on Windows'))
     return
   }
 
+  const uninstallLabel = t('Uninstall')
   const action = await vscode.window.showInformationMessage(
-    '将卸载 Windows 右键菜单（文件夹、文件夹空白处、.log、.zip）。是否继续？',
-    '卸载',
-    '取消',
+    t('This will uninstall Windows context menu entries for folders, folder backgrounds, .log files, and .zip files. Continue?'),
+    uninstallLabel,
+    t('Cancel'),
   )
-  if (action !== '卸载') return
+  if (action !== uninstallLabel) return
 
   try {
     let removed = 0
@@ -1013,13 +999,13 @@ async function uninstallWindowsContextMenu(context: vscode.ExtensionContext): Pr
     })
 
     if (removed === 0) {
-      vscode.window.showInformationMessage('右键菜单未安装，无需卸载')
+      vscode.window.showInformationMessage(t('Windows context menu entries are not installed'))
       return
     }
 
-    vscode.window.showInformationMessage('已卸载 Windows 右键菜单')
+    vscode.window.showInformationMessage(t('Windows context menu entries were uninstalled'))
   } catch (error) {
-    vscode.window.showErrorMessage(`卸载右键菜单失败: ${error}`)
+    vscode.window.showErrorMessage(t('Failed to uninstall Windows context menu entries: {0}', String(error)))
   }
 }
 /** 解析 on_error 截图文件名为标准化 key */
@@ -1173,7 +1159,7 @@ async function handleZipFile(uri: vscode.Uri, operation: LoadOperation): Promise
       name: filePath.replace(/\\/g, '/').split('/').pop() || filePath,
     })))
     if (selectedLogs.length === 0) {
-      vscode.window.showWarningMessage(`ZIP 文件中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+      vscode.window.showWarningMessage(t('No log file was found in the ZIP archive ({0})', PRIMARY_LOG_FILE_HINT))
       return
     }
 
@@ -1248,7 +1234,7 @@ async function handleZipFile(uri: vscode.Uri, operation: LoadOperation): Promise
 
       const primaryLogFiles = sortLoadedPrimaryLogSegments(Array.from(primaryLogsByPath.values()))
       if (primaryLogFiles.length === 0) {
-        vscode.window.showWarningMessage('ZIP 文件在读取期间发生变化，未能读取到所选日志')
+        vscode.window.showWarningMessage(t('The ZIP archive changed while it was being read, so the selected log could not be loaded'))
         return
       }
 
@@ -1264,7 +1250,7 @@ async function handleZipFile(uri: vscode.Uri, operation: LoadOperation): Promise
       })
     })
   } catch (error) {
-    showLoadError('读取 ZIP 文件失败', error, operation)
+    showLoadError(t('Failed to read ZIP archive'), error, operation)
   }
 }
 function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -1273,14 +1259,22 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
   
   // 生成 CSP nonce
   const nonce = getNonce()
+  const documentLanguage = /^[A-Za-z0-9-]+$/.test(vscode.env.language)
+    ? vscode.env.language
+    : 'en'
+  const panelTitle = t('MAA Log Analyzer')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  const loadingText = JSON.stringify(t('Loading MAA Log Analyzer...'))
 
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${documentLanguage}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}'; worker-src blob:; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource}; connect-src ${webview.cspSource} data: blob:;">
-  <title>MAA 日志分析器</title>
+  <title>${panelTitle}</title>
   <link rel="stylesheet" href="${webviewUri}/assets/index.css">
   <style>
     html, body {
@@ -1307,7 +1301,7 @@ function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): s
       letter-spacing: 0.4px;
     }
     #app:empty::before {
-      content: "正在加载 MAA 日志分析器...";
+      content: ${loadingText};
     }
   </style>
 </head>
