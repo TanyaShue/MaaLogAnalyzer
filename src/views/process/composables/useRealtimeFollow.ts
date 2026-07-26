@@ -7,21 +7,12 @@ import type { ScrollablePanelRef, UseRealtimeFollowOptions } from './realtimeFol
 import { buildTaskIdentity } from '@windsland52/maa-log-tools/task-identity'
 import type { NodeInfo } from '../../../types'
 
-type NodeTimelineItem = NodeInfo & { _uniqueKey: string }
+export type NodeTimelineItem = NodeInfo & { _uniqueKey: string }
 
-const attachNodeTimelineKey = (
+export const createNodeTimelineItem = (
   node: NodeInfo,
   key: string,
-): NodeTimelineItem => {
-  const item = node as NodeTimelineItem
-  if (item._uniqueKey === key) return item
-  Object.defineProperty(item, '_uniqueKey', {
-    value: key,
-    writable: true,
-    configurable: true,
-  })
-  return item
-}
+): NodeTimelineItem => ({ ...node, _uniqueKey: key })
 
 export const useRealtimeFollow = (options: UseRealtimeFollowOptions) => {
   const activeTaskIndex = ref(0)
@@ -36,7 +27,7 @@ export const useRealtimeFollow = (options: UseRealtimeFollowOptions) => {
     const selectedTask = options.selectedTask.value
     if (!selectedTask) return []
     const taskIdentity = buildTaskIdentity(selectedTask)
-    return (selectedTask.nodes || []).map((node, index) => attachNodeTimelineKey(
+    return (selectedTask.nodes || []).map((node, index) => createNodeTimelineItem(
       node,
       `${taskIdentity}-${node.node_id}-${node.ts}-${index}`,
     ))
