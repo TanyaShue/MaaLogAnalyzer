@@ -76,11 +76,12 @@ export async function extractArchiveContents(
   const format = getArchiveFormat(file.name)
 
   switch (format) {
-    case 'zip':
+    case 'zip': {
       const { extractZipContents } = await import('./zipExtractor')
       return extractZipContents(archiveFiles, selectPrimaryLogs, {
         archiveLimits: options.archiveLimits,
       })
+    }
 
     case '7z':
     case 'rar':
