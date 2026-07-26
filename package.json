@@ -22,7 +22,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "version": "node scripts/bump-version.js"
+    "version": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check"
   },
   "dependencies": {
     "7z-wasm": "^1.2.0",
