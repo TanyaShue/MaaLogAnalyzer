@@ -66,4 +66,14 @@ describe('release workflow shell safety', () => {
     expect(workflow).toContain("prerelease: ${{ contains(github.ref_name, '-') }}")
     expect(workflow).not.toContain('prerelease: false')
   })
+
+  it('uses lock files and the local VS Code packaging toolchain', () => {
+    const workflow = readWorkflow('release-vscode.yml')
+
+    expect(workflow).toContain('pnpm install --frozen-lockfile')
+    expect(workflow.match(/npm ci/g)).toHaveLength(2)
+    expect(workflow.match(/npm exec -- vsce/g)).toHaveLength(2)
+    expect(workflow).not.toMatch(/npm (?:i|install) -g/)
+    expect(workflow).not.toMatch(/^\s*vsce\s/m)
+  })
 })
