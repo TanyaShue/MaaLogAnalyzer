@@ -102,6 +102,10 @@ export interface PreflightOutput {
   warnings: string[]
 }
 
+const isTaskLifecycleProjection = (task: KernelOutput['tasks'][number]): boolean => {
+  return !task.uuid.startsWith('synthetic:resource_loading:')
+}
+
 const EMPTY_FRAMEWORK_EXTRACTION: FrameworkSessionExtraction = {
   sessions: [],
   summary: { status: 'none', versions: [] },
@@ -128,8 +132,9 @@ export const buildPreflightOutput = (
     }
   }
 
+  const taskLifecycleCount = output.tasks.filter(isTaskLifecycleProjection).length
   const reason: PreflightReason = output.events.length > 0
-    ? output.tasks.length > 0
+    ? taskLifecycleCount > 0
       ? 'notify_events_parsed'
       : 'no_task_lifecycle'
     : output.warnings.includes('Empty log content.')
@@ -140,7 +145,7 @@ export const buildPreflightOutput = (
     status: reason === 'notify_events_parsed' ? 'supported' : 'unsupported',
     reason,
     parserVersion: output.meta.parserVersion,
-    taskCount: output.tasks.length,
+    taskCount: taskLifecycleCount,
     eventCount: output.events.length,
     nodeStatisticCount: output.stats.nodes.length,
     recognitionStatisticCount: output.stats.recognitionActions.length,
