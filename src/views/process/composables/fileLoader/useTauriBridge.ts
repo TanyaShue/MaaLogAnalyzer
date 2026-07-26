@@ -2,6 +2,7 @@ import type { UseProcessFileLoaderOptions } from './types'
 import { toastError } from '../../../../utils/toast'
 import { invoke } from '@tauri-apps/api/core'
 import { decodeFileContent } from '../../../../utils/textEncoding'
+import { normalizeTauriDialogPaths } from '../../../../utils/fileDialog'
 import {
   createPrimaryLogSelectionOptions,
   sortLoadedPrimaryLogSegments,
@@ -24,7 +25,7 @@ export const useTauriBridge = (
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{
           name: 'Log Files',
           extensions: ['log', 'jsonl', 'txt', 'zip'],
@@ -33,19 +34,21 @@ export const useTauriBridge = (
         title: '选择日志文件',
       })
 
-      if (selected && typeof selected === 'string') {
+      const selectedPaths = normalizeTauriDialogPaths(selected)
+      const anchor = selectedPaths[0]
+      if (anchor) {
         try {
           setFileLoading(true)
           options.onFileLoadingStart()
 
-          if (selected.toLowerCase().endsWith('.zip')) {
+          if (anchor.toLowerCase().endsWith('.zip')) {
             const result = await invoke<{
               content: string
               primary_log_files: LoadedPrimaryLogFile[]
               error_images: Record<string, string>
               vision_images: Record<string, string>
               wait_freezes_images: Record<string, string>
-            }>('extract_zip_log', { path: selected })
+            }>('extract_zip_log', { path: anchor, paths: selectedPaths })
 
             const errorImages = createTauriImageMap(result.error_images)
             const visionImages = createTauriImageMap(result.vision_images)
@@ -56,8 +59,8 @@ export const useTauriBridge = (
               : createPrimaryLogSelectionOptions(primaryLogFiles)
             if (!selectedOptions) return
 
-            const selectedPaths = new Set(selectedOptions.map(option => option.path))
-            const selectedPrimaryLogFiles = primaryLogFiles.filter(file => selectedPaths.has(file.path))
+            const selectedLogPaths = new Set(selectedOptions.map(option => option.path))
+            const selectedPrimaryLogFiles = primaryLogFiles.filter(file => selectedLogPaths.has(file.path))
             if (selectedPrimaryLogFiles.length === 0) return
 
             options.onUploadContent(
@@ -70,16 +73,16 @@ export const useTauriBridge = (
             )
           } else {
             const { readFile } = await import('@tauri-apps/plugin-fs')
-            const content = decodeFileContent(await readFile(selected))
+            const content = decodeFileContent(await readFile(anchor))
 
             if (content) {
-              const fileName = selected.split(/[/\\]/).pop() || 'loaded.log'
+              const fileName = anchor.split(/[/\\]/).pop() || 'loaded.log'
               options.onUploadContent(
                 content,
                 undefined,
                 undefined,
                 undefined,
-                [{ path: selected, name: fileName, content }],
+                [{ path: anchor, name: fileName, content }],
               )
             }
           }

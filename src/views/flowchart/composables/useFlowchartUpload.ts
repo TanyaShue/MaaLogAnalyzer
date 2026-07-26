@@ -3,6 +3,7 @@ import { toastWarning } from '../../../utils/toast'
 import { isTauri } from '../../../utils/platform'
 import { decodeFileContent } from '../../../utils/textEncoding'
 import { replaceBlobUrl } from '../../../utils/blobUrlMap'
+import { normalizeTauriDialogPaths } from '../../../utils/fileDialog'
 import {
   collectTextFilesFromFiles,
   type LoadedTextFile,
@@ -125,13 +126,14 @@ export const useFlowchartUpload = ({
       if (key === 'file') {
         const { open } = await import('@tauri-apps/plugin-dialog')
         const selected = await open({
-          multiple: false,
+          multiple: true,
           filters: [{ name: 'Log Files', extensions: ['log', 'jsonl', 'txt', 'zip'] }],
           directory: false,
           title: '选择日志文件',
         })
-        if (!selected) return
-        const path = typeof selected === 'string' ? selected : (selected as any).path
+        const selectedPaths = normalizeTauriDialogPaths(selected)
+        const path = selectedPaths[0]
+        if (!path) return
         if (path.toLowerCase().endsWith('.zip')) {
           const { invoke } = await import('@tauri-apps/api/core')
           const result = await invoke<{
@@ -140,7 +142,7 @@ export const useFlowchartUpload = ({
             error_images: Record<string, string>
             vision_images: Record<string, string>
             wait_freezes_images: Record<string, string>
-          }>('extract_zip_log', { path })
+          }>('extract_zip_log', { path, paths: selectedPaths })
           emitUploadContent(
             result.content,
             toImageMap(result.error_images),

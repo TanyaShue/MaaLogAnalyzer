@@ -24,6 +24,14 @@ export { isTauri, isVSCode }
 
 const TEXT_SEARCH_EXTENSIONS = ['.log', '.txt', '.jsonl'] as const
 
+export const normalizeTauriDialogPaths = (
+  selected: string | string[] | null,
+): string[] => {
+  if (typeof selected === 'string') return [selected]
+  if (!Array.isArray(selected)) return []
+  return selected.filter((path): path is string => typeof path === 'string' && path.length > 0)
+}
+
 export interface LoadedTextFile {
   path: string
   name: string
@@ -94,7 +102,7 @@ async function openLogFileWithTauri(): Promise<string | null> {
     const { open } = await import('@tauri-apps/plugin-dialog')
 
     const selected = await open({
-      multiple: false,
+      multiple: true,
       filters: [{
         name: 'Log Files',
         extensions: ['log', 'jsonl', 'txt', 'zip', '7z', 'rar']
@@ -106,13 +114,15 @@ async function openLogFileWithTauri(): Promise<string | null> {
       title: '选择日志文件'
     })
 
-    if (selected && typeof selected === 'string') {
-      const lower = selected.toLowerCase()
+    const selectedPaths = normalizeTauriDialogPaths(selected)
+    const anchor = selectedPaths[0]
+    if (anchor) {
+      const lower = anchor.toLowerCase()
       if (lower.endsWith('.zip') || lower.endsWith('.7z') || lower.endsWith('.rar')) {
-        return await openArchiveFileWithTauri(selected)
+        return await openArchiveFileWithTauri(anchor, selectedPaths)
       }
       const { readFile } = await import('@tauri-apps/plugin-fs')
-      const bytes = await readFile(selected)
+      const bytes = await readFile(anchor)
       const content = decodeFileContent(bytes)
       return content
     }
@@ -122,11 +132,11 @@ async function openLogFileWithTauri(): Promise<string | null> {
   return null
 }
 
-async function openArchiveFileWithTauri(path: string): Promise<string | null> {
+async function openArchiveFileWithTauri(path: string, paths: string[]): Promise<string | null> {
   const result = await invoke<{
     content: string
     primary_log_files: LoadedPrimaryLogFile[]
-  }>('extract_zip_log', { path })
+  }>('extract_zip_log', { path, paths })
 
   // Rust extract_zip_log returns empty content; real logs live in primary_log_files
   const primaryLogFiles = result.primary_log_files ?? []

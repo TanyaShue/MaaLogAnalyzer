@@ -2,15 +2,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::io::{copy, Read};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use tauri::Manager;
 use tauri_plugin_fs::FsExt;
 
 use serde::Serialize;
+
+mod archive_safety;
+
+use archive_safety::{
+    add_archive_entry_count, canonicalize_archive_entry_path, create_private_output_file,
+    create_private_temp_directory, inspect_zip_directory, validate_archive_entry_path,
+    validate_archive_inputs, validate_authorized_archive_paths, ArchiveLimitKind,
+    ArchivePreflightBudget, ArchiveRuntimeBudget, ArchiveSnapshotWorkspace, ARCHIVE_LIMITS,
+};
 
 const PRIMARY_LOG_FILE_HINT: &str = "maa.log / maa.bak*.log / maafw.log / maafw.bak*.log";
 
@@ -53,6 +61,45 @@ struct ArchiveExtractResult {
     wait_freezes_images: HashMap<String, String>,
 }
 
+#[derive(Clone)]
+struct ZipEntryMetadata {
+    name: String,
+    compressed_size: u64,
+    extracted_size: u64,
+    is_file: bool,
+}
+
+#[derive(Default)]
+struct ArchiveExtractionState {
+    extraction_in_progress: AtomicBool,
+}
+
+impl ArchiveExtractionState {
+    fn try_start_extraction(&self) -> Result<ArchiveExtractionGuard<'_>, String> {
+        self.extraction_in_progress
+            .compare_exchange(
+                false,
+                true,
+                AtomicOrdering::Acquire,
+                AtomicOrdering::Relaxed,
+            )
+            .map_err(|_| "Another ZIP extraction is already in progress".to_string())?;
+        Ok(ArchiveExtractionGuard {
+            in_progress: &self.extraction_in_progress,
+        })
+    }
+}
+
+struct ArchiveExtractionGuard<'a> {
+    in_progress: &'a AtomicBool,
+}
+
+impl Drop for ArchiveExtractionGuard<'_> {
+    fn drop(&mut self) {
+        self.in_progress.store(false, AtomicOrdering::Release);
+    }
+}
+
 fn parse_mxu_zip_volume_name(file_name: &str) -> Option<(String, usize)> {
     let lower = file_name.to_ascii_lowercase();
     let stem_end = lower.strip_suffix(".zip")?.len();
@@ -72,39 +119,101 @@ fn parse_mxu_zip_volume_name(file_name: &str) -> Option<(String, usize)> {
     Some((base_name.to_string(), index))
 }
 
-fn collect_mxu_zip_volume_paths(path: &Path) -> Vec<PathBuf> {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return vec![path.to_path_buf()];
-    };
-    let Some((base_name, _)) = parse_mxu_zip_volume_name(file_name) else {
-        return vec![path.to_path_buf()];
-    };
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return vec![path.to_path_buf()];
-    };
+fn archive_path_key(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    }
+}
 
-    let mut volumes: Vec<(usize, String, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_type()
-                .map(|kind| kind.is_file())
-                .unwrap_or(false)
-        })
-        .filter_map(|entry| {
-            let candidate_name = entry.file_name().to_string_lossy().into_owned();
-            let (candidate_base, index) = parse_mxu_zip_volume_name(&candidate_name)?;
-            candidate_base.eq_ignore_ascii_case(&base_name).then_some((
-                index,
-                candidate_name,
-                entry.path(),
-            ))
-        })
-        .collect();
+fn resolve_archive_paths(
+    anchor: &Path,
+    provided_paths: Option<Vec<String>>,
+) -> Result<Vec<PathBuf>, String> {
+    if !anchor.is_absolute() {
+        return Err("Archive anchor path must be absolute".to_string());
+    }
 
-    if volumes.is_empty() {
-        return vec![path.to_path_buf()];
+    let raw_paths = provided_paths.unwrap_or_else(|| vec![anchor.to_string_lossy().into_owned()]);
+    if raw_paths.is_empty() {
+        return Err("Archive path list must not be empty".to_string());
+    }
+
+    let mut seen_paths = HashSet::new();
+    let mut paths = Vec::with_capacity(raw_paths.len());
+    for raw_path in raw_paths {
+        let candidate = PathBuf::from(raw_path);
+        if !candidate.is_absolute() {
+            return Err(format!(
+                "Archive volume path must be absolute: {}",
+                candidate.display()
+            ));
+        }
+        if !candidate
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        {
+            return Err(format!(
+                "Archive volume is not a ZIP file: {}",
+                candidate.display()
+            ));
+        }
+        if seen_paths.insert(archive_path_key(&candidate)) {
+            paths.push(candidate);
+        }
+    }
+
+    if paths.len() as u64 > ARCHIVE_LIMITS.max_volumes {
+        return Err(format!(
+            "Archive volume-count exceeds the configured limit ({} > {})",
+            paths.len(),
+            ARCHIVE_LIMITS.max_volumes
+        ));
+    }
+    let anchor_key = archive_path_key(anchor);
+    if !seen_paths.contains(&anchor_key) {
+        return Err("Archive path list does not contain its anchor".to_string());
+    }
+    if paths.len() == 1 {
+        return Ok(paths);
+    }
+
+    let anchor_parent = anchor
+        .parent()
+        .ok_or_else(|| "Archive anchor has no parent directory".to_string())?;
+    let anchor_name = anchor
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Archive anchor filename is not valid UTF-8".to_string())?;
+    let (anchor_base, _) = parse_mxu_zip_volume_name(anchor_name)
+        .ok_or_else(|| "Multiple ZIP files must be MXU part volumes".to_string())?;
+    let parent_key = archive_path_key(anchor_parent);
+    let mut seen_indices = HashSet::new();
+    let mut volumes = Vec::with_capacity(paths.len());
+
+    for candidate in paths {
+        let candidate_parent = candidate
+            .parent()
+            .ok_or_else(|| "Archive volume has no parent directory".to_string())?;
+        if archive_path_key(candidate_parent) != parent_key {
+            return Err("Archive volumes must share the same parent directory".to_string());
+        }
+        let candidate_name = candidate
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "Archive volume filename is not valid UTF-8".to_string())?;
+        let (candidate_base, index) = parse_mxu_zip_volume_name(candidate_name)
+            .ok_or_else(|| "Multiple ZIP files must be MXU part volumes".to_string())?;
+        if !candidate_base.eq_ignore_ascii_case(&anchor_base) {
+            return Err("Archive volumes must share the same MXU base name".to_string());
+        }
+        if !seen_indices.insert(index) {
+            return Err(format!("Archive volume index is duplicated: {index}"));
+        }
+        volumes.push((index, candidate_name.to_string(), candidate));
     }
 
     volumes.sort_by(|left, right| {
@@ -114,41 +223,150 @@ fn collect_mxu_zip_volume_paths(path: &Path) -> Vec<PathBuf> {
                 .cmp(&right.1.to_ascii_lowercase())
         })
     });
-    volumes.into_iter().map(|(_, _, path)| path).collect()
+    Ok(volumes.into_iter().map(|(_, _, path)| path).collect())
+}
+
+fn validate_zip_entry(entry: &zip::read::ZipFile<'_>) -> Result<(), String> {
+    validate_archive_entry_path(entry.name())?;
+    if entry.enclosed_name().is_none() {
+        return Err(format!(
+            "ZIP contains an unsafe entry path: {}",
+            entry.name()
+        ));
+    }
+    if entry.encrypted() {
+        return Err(format!("ZIP contains an encrypted entry: {}", entry.name()));
+    }
+    if entry.is_symlink() {
+        return Err(format!(
+            "ZIP contains a symbolic link entry: {}",
+            entry.name()
+        ));
+    }
+
+    if let Some(mode) = entry.unix_mode() {
+        let file_type = mode & 0o170000;
+        if file_type != 0 && file_type != 0o040000 && file_type != 0o100000 {
+            return Err(format!(
+                "ZIP contains a special file entry: {}",
+                entry.name()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn register_archive_entry_path(
+    seen_entry_paths: &mut HashSet<String>,
+    raw_name: &str,
+) -> Result<String, String> {
+    let name = canonicalize_archive_entry_path(raw_name)?;
+    if !seen_entry_paths.insert(name.to_lowercase()) {
+        return Err(format!(
+            "ZIP volumes contain a duplicate or aliased entry path: {raw_name}"
+        ));
+    }
+    Ok(name)
 }
 
 #[tauri::command]
-fn extract_zip_log(app: tauri::AppHandle, path: String) -> Result<ArchiveExtractResult, String> {
+fn extract_zip_log(
+    app: tauri::AppHandle,
+    resources: tauri::State<'_, ArchiveExtractionState>,
+    path: String,
+    paths: Option<Vec<String>>,
+) -> Result<ArchiveExtractResult, String> {
+    let _operation_guard = resources.try_start_extraction()?;
+    extract_zip_log_inner(&app, &path, paths)
+}
+
+fn extract_zip_log_inner(
+    app: &tauri::AppHandle,
+    path: &str,
+    paths: Option<Vec<String>>,
+) -> Result<ArchiveExtractResult, String> {
     let lower = path.to_lowercase();
     if !lower.ends_with(".zip") {
-        return Err(format!("Tauri 桌面端目前仅支持 ZIP 格式。7z 和 RAR 请使用 Web 版本。"));
+        return Err(format!(
+            "Tauri 桌面端目前仅支持 ZIP 格式。7z 和 RAR 请使用 Web 版本。"
+        ));
     }
 
-    if !app.fs_scope().is_allowed(Path::new(&path)) {
-        return Err("ZIP path is not authorized by the file dialog".to_string());
+    let archive_paths = resolve_archive_paths(Path::new(path), paths)?;
+    validate_authorized_archive_paths(&archive_paths, |candidate| {
+        app.fs_scope().is_allowed(candidate)
+    })?;
+    let volume_placeholders = vec![0_u64; archive_paths.len()];
+    validate_archive_inputs(&volume_placeholders, ARCHIVE_LIMITS)
+        .map_err(|error| error.to_string())?;
+
+    let snapshot_workspace = ArchiveSnapshotWorkspace::create(path)?;
+    let mut snapshots = Vec::with_capacity(archive_paths.len());
+    let mut compressed_sizes = Vec::with_capacity(archive_paths.len());
+    let mut total_compressed_bytes = 0_u64;
+    for (index, archive_path) in archive_paths.into_iter().enumerate() {
+        let remaining = ARCHIVE_LIMITS
+            .max_compressed_bytes
+            .saturating_sub(total_compressed_bytes);
+        let snapshot = snapshot_workspace.snapshot_source(&archive_path, index, remaining)?;
+        total_compressed_bytes = total_compressed_bytes
+            .checked_add(snapshot.size)
+            .ok_or_else(|| "Archive compressed-size total overflows".to_string())?;
+        compressed_sizes.push(snapshot.size);
+        snapshots.push(snapshot);
+    }
+    validate_archive_inputs(&compressed_sizes, ARCHIVE_LIMITS)
+        .map_err(|error| error.to_string())?;
+
+    let mut total_directory_entries = 0_u64;
+    let mut directory_infos = Vec::with_capacity(snapshots.len());
+    for snapshot in &mut snapshots {
+        let info = inspect_zip_directory(&mut snapshot.file, ARCHIVE_LIMITS.max_entries).map_err(
+            |error| format!("无法预检 ZIP [{}]: {error}", snapshot.source_path.display()),
+        )?;
+        total_directory_entries =
+            add_archive_entry_count(total_directory_entries, info.entries, ARCHIVE_LIMITS)
+                .map_err(|error| error.to_string())?;
+        directory_infos.push(info);
     }
 
-    let archive_paths = collect_mxu_zip_volume_paths(Path::new(&path));
-    let mut archives = Vec::with_capacity(archive_paths.len());
+    let mut archives = Vec::with_capacity(snapshots.len());
+    let mut archive_entries = Vec::with_capacity(snapshots.len());
     let mut names = Vec::new();
-    for archive_path in archive_paths {
-        let file = std::fs::File::open(&archive_path)
-            .map_err(|e| format!("无法打开文件 [{}]: {e}", archive_path.display()))?;
-        let mut archive = zip::ZipArchive::new(file)
+    let mut seen_entry_paths = HashSet::new();
+    let mut preflight_budget = ArchivePreflightBudget::default();
+    for (snapshot, directory_info) in snapshots.into_iter().zip(directory_infos) {
+        let archive_path = snapshot.source_path;
+        let mut archive = zip::ZipArchive::new(snapshot.file)
             .map_err(|e| format!("无法读取 ZIP [{}]: {e}", archive_path.display()))?;
+        if archive.len() as u64 != directory_info.entries {
+            return Err(format!(
+                "ZIP directory entry count changed after preflight [{}]",
+                archive_path.display()
+            ));
+        }
+        let mut entries = Vec::with_capacity(archive.len());
         for index in 0..archive.len() {
-            if let Ok(entry) = archive.by_index(index) {
-                names.push(entry.name().to_string());
-            }
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| format!("读取条目失败 [{}]: {e}", archive_path.display()))?;
+            validate_zip_entry(&entry)?;
+            preflight_budget
+                .add_directory_entry(entry.name_raw().len() as u64, ARCHIVE_LIMITS)
+                .map_err(|error| error.to_string())?;
+
+            let name = register_archive_entry_path(&mut seen_entry_paths, entry.name())?;
+            names.push(name.clone());
+            entries.push(ZipEntryMetadata {
+                name,
+                compressed_size: entry.compressed_size(),
+                extracted_size: entry.size(),
+                is_file: entry.is_file(),
+            });
         }
         archives.push((archive_path, archive));
+        archive_entries.push(entries);
     }
-
-    let temp_dir = create_zip_temp_dir(&path)?;
-    app.asset_protocol_scope()
-        .allow_directory(&temp_dir, false)
-        .map_err(|error| format!("Failed to authorize extracted image directory: {error}"))?;
-    let mut temp_seq: u64 = 0;
 
     let selected_logs = select_primary_log_group(&names);
     if selected_logs.is_empty() {
@@ -162,6 +380,43 @@ fn extract_zip_log(app: tauri::AppHandle, path: String) -> Result<ArchiveExtract
         .collect();
     let on_error_prefix = join_path(&base, "on_error/");
     let vision_prefix = join_path(&base, "vision/");
+    let on_error_prefix_lower = on_error_prefix.to_lowercase();
+    let vision_prefix_lower = vision_prefix.to_lowercase();
+
+    let mut has_selected_images = false;
+    for entry in archive_entries
+        .iter()
+        .flatten()
+        .filter(|entry| entry.is_file)
+    {
+        let lower = entry.name.to_lowercase();
+        let is_log = selected_log_lookup.contains_key(&lower);
+        let is_image = (lower.starts_with(&on_error_prefix_lower) && lower.ends_with(".png"))
+            || (lower.starts_with(&vision_prefix_lower) && lower.ends_with(".jpg"));
+        if is_log || is_image {
+            preflight_budget
+                .add_selected_entry(
+                    entry.compressed_size,
+                    entry.extracted_size,
+                    is_image,
+                    ARCHIVE_LIMITS,
+                )
+                .map_err(|error| error.to_string())?;
+            has_selected_images |= is_image;
+        }
+    }
+
+    let temp_dir = if has_selected_images {
+        let directory = create_zip_temp_dir(path)?;
+        app.asset_protocol_scope()
+            .allow_directory(&directory, false)
+            .map_err(|error| format!("Failed to authorize extracted image directory: {error}"))?;
+        Some(directory)
+    } else {
+        None
+    };
+    let mut temp_seq: u64 = 0;
+    let mut runtime_budget = ArchiveRuntimeBudget::default();
 
     let mut log_segments: Vec<LoadedPrimaryLogSegment> = Vec::new();
     let mut error_images: HashMap<String, String> = HashMap::new();
@@ -177,10 +432,16 @@ fn extract_zip_log(app: tauri::AppHandle, path: String) -> Result<ArchiveExtract
             let lower = name.to_lowercase();
 
             if let Some(candidate) = selected_log_lookup.get(&lower) {
-                let mut buf = Vec::new();
-                entry
-                    .read_to_end(&mut buf)
-                    .map_err(|e| format!("读取失败: {e}"))?;
+                let compressed_size = entry.compressed_size();
+                let expected_size = entry.size();
+                let buf = runtime_budget.read_to_end(
+                    &mut entry,
+                    compressed_size,
+                    expected_size,
+                    ARCHIVE_LIMITS.max_file_bytes,
+                    ArchiveLimitKind::FileSize,
+                    ARCHIVE_LIMITS,
+                )?;
                 let content = decode_content(&buf);
                 log_segments.push(LoadedPrimaryLogSegment {
                     path: candidate.path.clone(),
@@ -195,24 +456,44 @@ fn extract_zip_log(app: tauri::AppHandle, path: String) -> Result<ArchiveExtract
                     content_timestamp: extract_first_log_timestamp(&content),
                     content,
                 });
-            } else if lower.starts_with(&on_error_prefix.to_lowercase()) && lower.ends_with(".png")
-            {
+            } else if lower.starts_with(&on_error_prefix_lower) && lower.ends_with(".png") {
                 // Extract filename
                 let file_name = name.rsplit('/').next().unwrap_or("");
                 if let Some(key) = parse_error_image_key(file_name) {
-                    let saved_path =
-                        save_zip_entry_to_temp_file(&mut entry, &temp_dir, &mut temp_seq, "png")?;
+                    let saved_path = save_zip_entry_to_temp_file(
+                        &mut entry,
+                        temp_dir
+                            .as_deref()
+                            .ok_or_else(|| "ZIP image directory is unavailable".to_string())?,
+                        &mut temp_seq,
+                        "png",
+                        &mut runtime_budget,
+                    )?;
                     error_images.insert(key, saved_path);
                 }
-            } else if lower.starts_with(&vision_prefix.to_lowercase()) && lower.ends_with(".jpg") {
+            } else if lower.starts_with(&vision_prefix_lower) && lower.ends_with(".jpg") {
                 let file_name = name.rsplit('/').next().unwrap_or("");
                 if let Some(key) = parse_wait_freezes_key(file_name) {
-                    let saved_path =
-                        save_zip_entry_to_temp_file(&mut entry, &temp_dir, &mut temp_seq, "jpg")?;
+                    let saved_path = save_zip_entry_to_temp_file(
+                        &mut entry,
+                        temp_dir
+                            .as_deref()
+                            .ok_or_else(|| "ZIP image directory is unavailable".to_string())?,
+                        &mut temp_seq,
+                        "jpg",
+                        &mut runtime_budget,
+                    )?;
                     wait_freezes_images.insert(key, saved_path);
                 } else if let Some(key) = parse_vision_image_key(file_name) {
-                    let saved_path =
-                        save_zip_entry_to_temp_file(&mut entry, &temp_dir, &mut temp_seq, "jpg")?;
+                    let saved_path = save_zip_entry_to_temp_file(
+                        &mut entry,
+                        temp_dir
+                            .as_deref()
+                            .ok_or_else(|| "ZIP image directory is unavailable".to_string())?,
+                        &mut temp_seq,
+                        "jpg",
+                        &mut runtime_budget,
+                    )?;
                     // 同一 key 覆盖（取最后出现的文件）
                     vision_images.insert(key, saved_path);
                 }
@@ -245,23 +526,7 @@ fn extract_zip_log(app: tauri::AppHandle, path: String) -> Result<ArchiveExtract
 }
 
 fn create_zip_temp_dir(zip_path: &str) -> Result<PathBuf, String> {
-    let stem = Path::new(zip_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("zip")
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect::<String>();
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("获取系统时间失败: {e}"))?
-        .as_millis();
-
-    let mut dir = std::env::temp_dir();
-    dir.push(format!("maa-log-analyzer-zip-{stem}-{ts}"));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败: {e}"))?;
-    Ok(dir)
+    create_private_temp_directory(zip_path)
 }
 
 fn save_zip_entry_to_temp_file(
@@ -269,11 +534,22 @@ fn save_zip_entry_to_temp_file(
     temp_dir: &Path,
     seq: &mut u64,
     ext: &str,
+    runtime_budget: &mut ArchiveRuntimeBudget,
 ) -> Result<String, String> {
     *seq += 1;
     let path = temp_dir.join(format!("{:08}.{ext}", *seq));
-    let mut output = std::fs::File::create(&path).map_err(|e| format!("创建临时文件失败: {e}"))?;
-    copy(entry, &mut output).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    let mut output = create_private_output_file(&path)?;
+    let compressed_size = entry.compressed_size();
+    let expected_size = entry.size();
+    runtime_budget.copy_to(
+        entry,
+        &mut output,
+        compressed_size,
+        expected_size,
+        ARCHIVE_LIMITS.max_image_bytes,
+        ArchiveLimitKind::ImageSize,
+        ARCHIVE_LIMITS,
+    )?;
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -531,6 +807,7 @@ fn decode_content(bytes: &[u8]) -> String {
 
 fn main() {
     tauri::Builder::default()
+        .manage(ArchiveExtractionState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![extract_zip_log])
@@ -548,7 +825,23 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_mxu_zip_volume_name;
+    use std::io::{Cursor, Write};
+
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+    use super::{
+        parse_mxu_zip_volume_name, register_archive_entry_path, resolve_archive_paths,
+        validate_zip_entry, ArchiveExtractionState,
+    };
+
+    fn archive_with_file(name: &str) -> ZipArchive<Cursor<Vec<u8>>> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        writer.start_file(name, options).unwrap();
+        writer.write_all(b"content").unwrap();
+        ZipArchive::new(writer.finish().unwrap()).unwrap()
+    }
 
     #[test]
     fn parses_two_and_three_digit_mxu_zip_volumes() {
@@ -572,5 +865,122 @@ mod tests {
             parse_mxu_zip_volume_name("project-logs-20260717-120000-part000.zip"),
             None,
         );
+    }
+
+    #[test]
+    fn resolves_explicit_volumes_without_parent_enumeration() {
+        let parent = std::env::temp_dir().join("maa-log-analyzer-volume-tests");
+        let part01 = parent.join("bundle-part01.zip");
+        let part02 = parent.join("bundle-part02.zip");
+        let paths = resolve_archive_paths(
+            &part02,
+            Some(vec![
+                part02.to_string_lossy().into_owned(),
+                part01.to_string_lossy().into_owned(),
+                part01.to_string_lossy().into_owned(),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec![part01, part02]);
+    }
+
+    #[test]
+    fn rejects_invalid_explicit_volume_sets() {
+        let parent = std::env::temp_dir().join("maa-log-analyzer-volume-tests");
+        let anchor = parent.join("bundle-part01.zip");
+        let missing_anchor = parent.join("bundle-part02.zip");
+        assert!(resolve_archive_paths(
+            &anchor,
+            Some(vec![missing_anchor.to_string_lossy().into_owned()]),
+        )
+        .is_err());
+
+        let other_parent = std::env::temp_dir()
+            .join("maa-log-analyzer-other-volume-tests")
+            .join("bundle-part02.zip");
+        assert!(resolve_archive_paths(
+            &anchor,
+            Some(vec![
+                anchor.to_string_lossy().into_owned(),
+                other_parent.to_string_lossy().into_owned(),
+            ]),
+        )
+        .is_err());
+
+        let duplicate_index = parent.join("bundle-part001.zip");
+        assert!(resolve_archive_paths(
+            &anchor,
+            Some(vec![
+                anchor.to_string_lossy().into_owned(),
+                duplicate_index.to_string_lossy().into_owned(),
+            ]),
+        )
+        .is_err());
+
+        let excessive_paths = (1..=17)
+            .map(|index| {
+                parent
+                    .join(format!("bundle-part{index:02}.zip"))
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(resolve_archive_paths(&anchor, Some(excessive_paths)).is_err());
+    }
+
+    #[test]
+    fn keeps_single_archive_calls_compatible() {
+        let anchor = std::env::temp_dir().join("ordinary.zip");
+        assert_eq!(
+            resolve_archive_paths(&anchor, None).unwrap(),
+            vec![anchor]
+        );
+    }
+
+    #[test]
+    fn validates_real_zip_entry_paths() {
+        let mut safe_archive = archive_with_file("debug/maa.log");
+        let safe_entry = safe_archive.by_index(0).unwrap();
+        assert!(validate_zip_entry(&safe_entry).is_ok());
+
+        let mut unsafe_archive = archive_with_file("../maa.log");
+        let unsafe_entry = unsafe_archive.by_index(0).unwrap();
+        assert!(validate_zip_entry(&unsafe_entry).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_and_aliased_paths_across_volumes() {
+        let mut paths = std::collections::HashSet::new();
+        assert_eq!(
+            register_archive_entry_path(&mut paths, "debug/maa.log").unwrap(),
+            "debug/maa.log"
+        );
+        assert!(register_archive_entry_path(&mut paths, "DEBUG\\MAA.LOG").is_err());
+    }
+
+    #[test]
+    fn rejects_real_zip_symlink_entries() {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .add_symlink(
+                "debug/maa-link.log",
+                "maa.log",
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+        let mut archive = ZipArchive::new(writer.finish().unwrap()).unwrap();
+        let entry = archive.by_index(0).unwrap();
+        assert!(validate_zip_entry(&entry).is_err());
+    }
+
+    #[test]
+    fn rejects_concurrent_extractions_and_unlocks_after_drop() {
+        let resources = ArchiveExtractionState::default();
+        let first = resources.try_start_extraction().unwrap();
+        assert!(resources.try_start_extraction().is_err());
+
+        drop(first);
+        assert!(resources.try_start_extraction().is_ok());
     }
 }
