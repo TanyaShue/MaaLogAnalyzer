@@ -188,7 +188,10 @@ export async function ensureSevenZipModule(): Promise<SevenZipModuleResult> {
       })
       return sevenZipInstance
     } catch (error) {
-      throw new Error(`加载 7z 解压模块失败: ${error instanceof Error ? error.message : String(error)}`)
+      throw Object.assign(
+        new Error(`加载 7z 解压模块失败: ${error instanceof Error ? error.message : String(error)}`),
+        { cause: error },
+      )
     } finally {
       sevenZipLoading = null
     }
