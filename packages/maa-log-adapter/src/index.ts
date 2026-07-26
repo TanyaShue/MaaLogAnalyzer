@@ -4,12 +4,16 @@ import type {
   RuntimeParseInput,
   RuntimeParseResult,
 } from '@windsland52/maa-log-runtime'
-import { LogParser } from '@windsland52/maa-log-parser'
+import {
+  DEFAULT_PARSER_VERSION,
+  LogParser,
+} from '@windsland52/maa-log-parser'
 import { NodeStatisticsAnalyzer } from '@windsland52/maa-log-parser/node-statistics'
 import type { TaskInfo as ParserTaskInfo } from '@windsland52/maa-log-parser/types'
 
 export const createMlaRuntimeAdapter = (): RuntimeExecutionAdapter<ParserTaskInfo> => {
   return {
+    parserVersion: DEFAULT_PARSER_VERSION,
     async parse(input: RuntimeParseInput): Promise<RuntimeParseResult<ParserTaskInfo>> {
       const parser = new LogParser()
       parser.setErrorImages(input.errorImages ?? new Map())

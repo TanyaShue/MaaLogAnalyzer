@@ -32,6 +32,7 @@ export interface RuntimeParseResult<TTask extends TaskInfo = TaskInfo> {
 }
 
 export interface RuntimeExecutionAdapter<TTask extends TaskInfo = TaskInfo> {
+  parserVersion?: string
   parse: (input: RuntimeParseInput) => Promise<RuntimeParseResult<TTask>>
   buildStatistics: (tasks: TTask[]) => KernelStatistics
 }
@@ -58,7 +59,7 @@ export const analyzeLogContentWith = async <TTask extends TaskInfo = TaskInfo>(
     tasks: parseResult.tasks,
     events: parseResult.events,
     stats,
-    parserVersion: input.parserVersion,
+    parserVersion: input.parserVersion || adapter.parserVersion,
   })
 }
 

@@ -1,4 +1,9 @@
 export { LogParser } from './logParser'
+export {
+  DEFAULT_PARSER_VERSION,
+  PARSER_PACKAGE_NAME,
+  PARSER_PACKAGE_VERSION,
+} from '../version'
 export type {
   ParseArtifactsSnapshot,
   ParseFileOptions,
