@@ -10,12 +10,15 @@ interface CreateRealtimeParseSchedulerOptions {
   syncRealtimeLoadedTarget: (session: RealtimeSessionState) => void
 }
 
+const MAX_REALTIME_PARSE_RETRIES = 3
+
 export const createRealtimeParseScheduler = (
   options: CreateRealtimeParseSchedulerOptions,
 ) => {
   const realtimeParsing = ref(false)
   const realtimeReparseRequested = ref(false)
   let realtimeParseTimer: number | null = null
+  let realtimeParseRetryCount = 0
 
   const runRealtimeParse = async () => {
     if (realtimeParsing.value) {
@@ -27,21 +30,36 @@ export const createRealtimeParseScheduler = (
     if (!session) return
 
     realtimeParsing.value = true
+    let retryRequested = false
     try {
-      const pendingLines = session.pendingLines.splice(0, session.pendingLines.length)
-      if (pendingLines.length > 0) {
+      const pendingLineCount = session.pendingLines.length
+      if (pendingLineCount > 0) {
+        const pendingLines = session.pendingLines.slice(0, pendingLineCount)
         options.appendRealtimeLines(pendingLines)
+        session.pendingLines.splice(0, pendingLineCount)
       }
+
+      if (options.realtimeSession.value !== session) return
+
       const parsedTasks = options.getTasksSnapshot()
       options.applyParsedTasks(parsedTasks, true)
       options.syncRealtimeLoadedTarget(session)
+      realtimeParseRetryCount = 0
     } catch (error) {
       console.warn('[realtime] parse failed:', error)
+      if (
+        options.realtimeSession.value === session &&
+        realtimeParseRetryCount < MAX_REALTIME_PARSE_RETRIES
+      ) {
+        realtimeParseRetryCount += 1
+        retryRequested = true
+      }
     } finally {
       realtimeParsing.value = false
-      if (realtimeReparseRequested.value) {
-        realtimeReparseRequested.value = false
-        if (options.realtimeSession.value) {
+      const shouldSchedule = realtimeReparseRequested.value || retryRequested
+      realtimeReparseRequested.value = false
+      if (shouldSchedule && options.realtimeSession.value === session) {
+        if (realtimeParseTimer == null) {
           realtimeParseTimer = window.setTimeout(() => {
             realtimeParseTimer = null
             void runRealtimeParse()
@@ -68,6 +86,7 @@ export const createRealtimeParseScheduler = (
   const resetParseState = () => {
     realtimeReparseRequested.value = false
     realtimeParsing.value = false
+    realtimeParseRetryCount = 0
   }
 
   return {
