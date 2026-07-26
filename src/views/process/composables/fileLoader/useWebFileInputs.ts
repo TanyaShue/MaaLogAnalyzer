@@ -23,6 +23,8 @@ import {
   registerBrowserInputFile,
   type BrowserInputBudget,
 } from '../../../../utils/browserInputBudget'
+import { revokeBlobUrlMap } from '../../../../utils/blobUrlMap'
+import type { FileLoadOperationGate } from './operationGate'
 
 const getFileRelativePath = (file: File): string => {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
@@ -107,26 +109,34 @@ const resolveSelectedLogContent = async (
   }
 }
 
-export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLoading: (loading: boolean) => void) => {
+export const useWebFileInputs = (
+  options: UseProcessFileLoaderOptions,
+  operationGate: FileLoadOperationGate,
+) => {
   const folderInputRef = ref<HTMLInputElement | null>(null)
   const fileInputRef = ref<HTMLInputElement | null>(null)
 
+  const revokeDebugAssets = (assets: Awaited<ReturnType<typeof collectDebugAssetsFromFiles>>) => {
+    revokeBlobUrlMap(assets.errorImages)
+    revokeBlobUrlMap(assets.visionImages)
+    revokeBlobUrlMap(assets.waitFreezesImages)
+  }
+
   const handleDirectoryEntry = async (dirEntry: FileSystemDirectoryEntry) => {
-    let delegatedArchive = false
+    const generation = operationGate.begin()
     try {
-      setFileLoading(true)
-      options.onFileLoadingStart()
+      if (!operationGate.startLoading(generation)) return
 
       const budget = createBrowserInputBudget()
       const files = await readDirectoryFiles(dirEntry, '', budget)
+      if (!operationGate.isCurrent(generation)) return
       const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs, budget)
+      if (!operationGate.isCurrent(generation)) return
       if (cancelled) return
       if (primaryLogFiles.length === 0) {
         const volumes = findMxuZipVolumes(files)
         if (volumes.length > 0) {
-          delegatedArchive = true
-          setFileLoading(false)
-          options.onFileLoadingEnd()
+          operationGate.finish(generation)
           options.onUploadFile(volumes.length > 1 ? volumes : volumes[0], options.selectPrimaryLogs)
           return
         }
@@ -135,7 +145,12 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
       }
 
       const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+      if (!operationGate.isCurrent(generation)) return
       const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
+      if (!operationGate.isCurrent(generation)) {
+        revokeDebugAssets(debugAssets)
+        return
+      }
       options.onUploadContent(
         '',
         debugAssets.errorImages,
@@ -145,12 +160,9 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
         primaryLogFiles,
       )
     } catch (error) {
-      toastError('读取文件夹失败: ' + error)
+      if (operationGate.isCurrent(generation)) toastError('读取文件夹失败: ' + error)
     } finally {
-      if (!delegatedArchive) {
-        setFileLoading(false)
-        options.onFileLoadingEnd()
-      }
+      operationGate.finish(generation)
     }
   }
 
@@ -173,6 +185,7 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
       .filter((file): file is File => file != null)
     const file = files[0]
     if (file) {
+      operationGate.begin()
       options.onUploadFile(getMxuZipUpload(files, file), options.selectPrimaryLogs)
     }
   }
@@ -187,20 +200,18 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
     const files = input.files
     if (!files || files.length === 0) return
 
-    let delegatedArchive = false
+    const generation = operationGate.begin()
     try {
-      setFileLoading(true)
-      options.onFileLoadingStart()
+      if (!operationGate.startLoading(generation)) return
 
       const budget = createBrowserInputBudget()
       const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs, budget)
+      if (!operationGate.isCurrent(generation)) return
       if (cancelled) return
       if (primaryLogFiles.length === 0) {
         const volumes = findMxuZipVolumes(files)
         if (volumes.length > 0) {
-          delegatedArchive = true
-          setFileLoading(false)
-          options.onFileLoadingEnd()
+          operationGate.finish(generation)
           options.onUploadFile(volumes.length > 1 ? volumes : volumes[0], options.selectPrimaryLogs)
           return
         }
@@ -209,7 +220,12 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
       }
 
       const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+      if (!operationGate.isCurrent(generation)) return
       const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
+      if (!operationGate.isCurrent(generation)) {
+        revokeDebugAssets(debugAssets)
+        return
+      }
       options.onUploadContent(
         '',
         debugAssets.errorImages,
@@ -219,21 +235,20 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
         primaryLogFiles,
       )
     } catch (error) {
-      toastError('读取文件失败: ' + error)
+      if (operationGate.isCurrent(generation)) toastError('读取文件失败: ' + error)
     } finally {
-      if (!delegatedArchive) {
-        setFileLoading(false)
-        options.onFileLoadingEnd()
-      }
+      operationGate.finish(generation)
       input.value = ''
     }
   }
 
   const triggerFolderSelect = () => {
+    operationGate.begin()
     folderInputRef.value?.click()
   }
 
   const triggerFileSelect = () => {
+    operationGate.begin()
     fileInputRef.value?.click()
   }
 
@@ -242,6 +257,7 @@ export const useWebFileInputs = (options: UseProcessFileLoaderOptions, setFileLo
     const files = Array.from(input.files ?? [])
     const file = files[0]
     if (file) {
+      operationGate.begin()
       options.onUploadFile(getMxuZipUpload(files, file), options.selectPrimaryLogs)
     }
     input.value = ''

@@ -2,7 +2,7 @@ import { onUnmounted, ref } from 'vue'
 import { toastWarning } from '../../../utils/toast'
 import { isTauri } from '../../../utils/platform'
 import { decodeFileContent } from '../../../utils/textEncoding'
-import { replaceBlobUrl } from '../../../utils/blobUrlMap'
+import { replaceBlobUrl, revokeBlobUrlMap } from '../../../utils/blobUrlMap'
 import { chargeTauriRegularFile, normalizeTauriDialogPaths } from '../../../utils/fileDialog'
 import {
   collectTextFilesFromFiles,
@@ -50,6 +50,18 @@ export const useFlowchartUpload = ({
   const fileInputRef = ref<HTMLInputElement | null>(null)
   const folderInputRef = ref<HTMLInputElement | null>(null)
   const archiveResourceOwner = createTauriArchiveResourceOwner()
+  let uploadGeneration = 0
+
+  const beginUpload = () => {
+    uploadGeneration += 1
+    return uploadGeneration
+  }
+
+  const isCurrentUpload = (generation: number) => generation === uploadGeneration
+
+  const revokeUploadImages = (...maps: Array<Map<string, string>>) => {
+    for (const map of maps) revokeBlobUrlMap(map)
+  }
 
   const uploadOptions = [
     { label: '选择文件', key: 'file' },
@@ -71,7 +83,13 @@ export const useFlowchartUpload = ({
     textFiles?: LoadedTextFile[],
     primaryLogFiles?: LoadedPrimaryLogFile[],
     resourceToken?: string | null,
+    generation = uploadGeneration,
   ) {
+    if (!isCurrentUpload(generation)) {
+      revokeUploadImages(errorImages, visionImages, waitFreezesImages)
+      await releaseTauriArchiveResource(resourceToken)
+      return
+    }
     let adoptedResource = false
     const releasePrevious = archiveResourceOwner.release()
     try {
@@ -93,14 +111,16 @@ export const useFlowchartUpload = ({
     }
   }
 
-  const emitUploadFile = (file: File | File[]) => {
+  const emitUploadFile = (file: File | File[], generation: number) => {
+    if (!isCurrentUpload(generation)) return
     void archiveResourceOwner.release()
     onUploadFile(file)
   }
 
   function handleUploadSelect(key: string) {
+    const generation = beginUpload()
     if (isTauri()) {
-      void handleTauriOpen(key)
+      void handleTauriOpen(key, generation)
     } else if (key === 'file') {
       fileInputRef.value?.click()
     } else {
@@ -160,7 +180,7 @@ export const useFlowchartUpload = ({
     }
   }
 
-  async function handleTauriOpen(key: string) {
+  async function handleTauriOpen(key: string, generation: number) {
     try {
       if (key === 'file') {
         const { open } = await import('@tauri-apps/plugin-dialog')
@@ -170,6 +190,7 @@ export const useFlowchartUpload = ({
           directory: false,
           title: '选择日志文件',
         })
+        if (!isCurrentUpload(generation)) return
         const selectedPaths = normalizeTauriDialogPaths(selected)
         const path = selectedPaths[0]
         if (!path) return
@@ -191,6 +212,7 @@ export const useFlowchartUpload = ({
             undefined,
             sortLoadedPrimaryLogSegments(result.primary_log_files ?? []),
             result.resource_token,
+            generation,
           )
         } else {
           const { readFile } = await import('@tauri-apps/plugin-fs')
@@ -198,8 +220,16 @@ export const useFlowchartUpload = ({
           registerInputResourceEntry(budget, path, 0)
           await chargeTauriRegularFile(path, budget)
           const content = decodeFileContent(await readFile(path))
-          await archiveResourceOwner.release()
-          onUploadContent(content)
+          await emitUploadContent(
+            content,
+            new Map(),
+            new Map(),
+            new Map(),
+            undefined,
+            undefined,
+            undefined,
+            generation,
+          )
         }
       } else {
         const { openFolderDialog } = await import('../../../utils/fileDialog')
@@ -212,10 +242,12 @@ export const useFlowchartUpload = ({
           result.waitFreezesImages,
           result.textFiles,
           result.primaryLogFiles,
+          undefined,
+          generation,
         )
       }
     } catch (error) {
-      console.error('Tauri open failed:', error)
+      if (isCurrentUpload(generation)) console.error('Tauri open failed:', error)
     }
   }
 
@@ -223,7 +255,8 @@ export const useFlowchartUpload = ({
     const input = event.target as HTMLInputElement
     const files = Array.from(input.files ?? [])
     const file = files[0]
-    if (file) emitUploadFile(getMxuZipUpload(files, file))
+    const generation = beginUpload()
+    if (file) emitUploadFile(getMxuZipUpload(files, file), generation)
     input.value = ''
   }
 
@@ -231,54 +264,70 @@ export const useFlowchartUpload = ({
     const input = event.target as HTMLInputElement
     const files = input.files
     if (!files || files.length === 0) return
+    const generation = beginUpload()
 
-    const budget = createBrowserInputBudget()
-    const { scopedFiles, primaryLogFiles } = await resolveSelectedLogContentFromFiles(files, budget)
-    if (primaryLogFiles.length === 0) {
-      const volumes = findMxuZipVolumes(files)
-      if (volumes.length > 0) {
-        emitUploadFile(volumes.length > 1 ? volumes : volumes[0])
-        input.value = ''
+    try {
+      const budget = createBrowserInputBudget()
+      const { scopedFiles, primaryLogFiles } = await resolveSelectedLogContentFromFiles(files, budget)
+      if (!isCurrentUpload(generation)) return
+      if (primaryLogFiles.length === 0) {
+        const volumes = findMxuZipVolumes(files)
+        if (volumes.length > 0) {
+          emitUploadFile(volumes.length > 1 ? volumes : volumes[0], generation)
+          return
+        }
+        toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
         return
       }
-      toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-      input.value = ''
-      return
-    }
 
-    const errorImages = new Map<string, string>()
-    const visionImages = new Map<string, string>()
-    const waitFreezesImages = new Map<string, string>()
+      const errorImages = new Map<string, string>()
+      const visionImages = new Map<string, string>()
+      const waitFreezesImages = new Map<string, string>()
 
-    for (const file of scopedFiles) {
-      const name = file.name.toLowerCase()
-      if (name.endsWith('.png') || name.endsWith('.jpg')) {
-        chargeBrowserInputFile(budget, file, { image: true })
-      }
-    }
-
-    for (const file of scopedFiles) {
-      const name = file.name.toLowerCase()
-      if (name.endsWith('.png') || name.endsWith('.jpg')) {
-        const baseName = file.name.replace(/\.(png|jpg)$/i, '')
-        if (baseName.endsWith('_wait_freezes')) {
-          replaceBlobUrl(waitFreezesImages, baseName, file)
-        } else if (baseName.includes('_vision_')) {
-          replaceBlobUrl(visionImages, baseName, file)
-        } else {
-          replaceBlobUrl(errorImages, baseName, file)
+      for (const file of scopedFiles) {
+        const name = file.name.toLowerCase()
+        if (name.endsWith('.png') || name.endsWith('.jpg')) {
+          chargeBrowserInputFile(budget, file, { image: true })
         }
       }
-    }
 
-    if (primaryLogFiles.length > 0) {
-      const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
-      await emitUploadContent('', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles)
+      try {
+        for (const file of scopedFiles) {
+          const name = file.name.toLowerCase()
+          if (name.endsWith('.png') || name.endsWith('.jpg')) {
+            const baseName = file.name.replace(/\.(png|jpg)$/i, '')
+            if (baseName.endsWith('_wait_freezes')) {
+              replaceBlobUrl(waitFreezesImages, baseName, file)
+            } else if (baseName.includes('_vision_')) {
+              replaceBlobUrl(visionImages, baseName, file)
+            } else {
+              replaceBlobUrl(errorImages, baseName, file)
+            }
+          }
+        }
+
+        const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+        await emitUploadContent(
+          '',
+          errorImages,
+          visionImages,
+          waitFreezesImages,
+          textFiles,
+          primaryLogFiles,
+          undefined,
+          generation,
+        )
+      } catch (error) {
+        revokeUploadImages(errorImages, visionImages, waitFreezesImages)
+        throw error
+      }
+    } finally {
+      input.value = ''
     }
-    input.value = ''
   }
 
   onUnmounted(() => {
+    beginUpload()
     void archiveResourceOwner.dispose()
   })
 

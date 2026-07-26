@@ -1,4 +1,4 @@
-import { replaceBlobUrl } from '../../../utils/blobUrlMap'
+import { replaceBlobUrl, revokeBlobUrlMap } from '../../../utils/blobUrlMap'
 import {
   chargeBrowserInputFile,
   BROWSER_INPUT_MAX_DIRECTORY_DEPTH,
@@ -133,8 +133,15 @@ export const collectDebugAssetsFromFiles = async (
     }
   }
 
-  for (const image of selectedImages) {
-    replaceBlobUrl(image.target, image.key, image.file)
+  try {
+    for (const image of selectedImages) {
+      replaceBlobUrl(image.target, image.key, image.file)
+    }
+  } catch (error) {
+    revokeBlobUrlMap(errorImages)
+    revokeBlobUrlMap(visionImages)
+    revokeBlobUrlMap(waitFreezesImages)
+    throw error
   }
 
   return {

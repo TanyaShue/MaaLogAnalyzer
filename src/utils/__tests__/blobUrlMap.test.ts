@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { replaceBlobUrl } from '../blobUrlMap'
+import { replaceBlobUrl, revokeBlobUrlMap } from '../blobUrlMap'
 
 describe('replaceBlobUrl', () => {
   afterEach(() => {
@@ -36,5 +36,19 @@ describe('replaceBlobUrl', () => {
 
     expect(target.get('same-key')).toBe('blob:first')
     expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('revokes only blob URLs and clears the map', () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const target = new Map([
+      ['browser', 'blob:browser-image'],
+      ['native', 'asset://localhost/image.png'],
+    ])
+
+    revokeBlobUrlMap(target)
+
+    expect(revoke).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledWith('blob:browser-image')
+    expect(target.size).toBe(0)
   })
 })

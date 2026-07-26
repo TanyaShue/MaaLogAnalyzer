@@ -5,10 +5,19 @@ import { useWebFileInputs } from './fileLoader/useWebFileInputs'
 import { useVSCodeBridge } from './fileLoader/useVSCodeBridge'
 import { useTauriBridge } from './fileLoader/useTauriBridge'
 import { createTauriArchiveResourceOwner } from '../../../utils/tauriArchiveResources'
+import { createFileLoadOperationGate } from './fileLoader/operationGate'
 
 export const useProcessFileLoader = (options: UseProcessFileLoaderOptions) => {
   const fileLoading = ref(false)
   const archiveResourceOwner = createTauriArchiveResourceOwner()
+  const setFileLoading = (loading: boolean) => {
+    fileLoading.value = loading
+  }
+  const operationGate = createFileLoadOperationGate({
+    setLoading: setFileLoading,
+    onLoadingStart: options.onFileLoadingStart,
+    onLoadingEnd: options.onFileLoadingEnd,
+  })
   const releaseArchiveResource = () => {
     void archiveResourceOwner.release()
   }
@@ -23,10 +32,6 @@ export const useProcessFileLoader = (options: UseProcessFileLoaderOptions) => {
       options.onUploadContent(...args)
     },
   }
-  const setFileLoading = (loading: boolean) => {
-    fileLoading.value = loading
-  }
-
   const {
     folderInputRef,
     fileInputRef,
@@ -36,7 +41,7 @@ export const useProcessFileLoader = (options: UseProcessFileLoaderOptions) => {
     handleFileInputChange,
     triggerFolderSelect,
     triggerFileSelect,
-  } = useWebFileInputs(lifecycleOptions, setFileLoading)
+  } = useWebFileInputs(lifecycleOptions, operationGate)
 
   const {
     handleVSCodeOpen,
@@ -46,9 +51,10 @@ export const useProcessFileLoader = (options: UseProcessFileLoaderOptions) => {
   const {
     handleTauriOpen,
     handleTauriOpenFolder,
-  } = useTauriBridge(lifecycleOptions, setFileLoading, archiveResourceOwner)
+  } = useTauriBridge(lifecycleOptions, operationGate, archiveResourceOwner)
 
   onUnmounted(() => {
+    operationGate.begin()
     void archiveResourceOwner.dispose()
   })
 

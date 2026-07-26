@@ -16,6 +16,7 @@ import {
   createInputResourceBudget,
   registerInputResourceEntry,
 } from '../../../../utils/browserInputBudget'
+import type { FileLoadOperationGate } from './operationGate'
 
 const createTauriImageMap = (entries: Record<string, string>) => {
   const result = new Map<string, string>()
@@ -27,10 +28,11 @@ const createTauriImageMap = (entries: Record<string, string>) => {
 
 export const useTauriBridge = (
   options: UseProcessFileLoaderOptions,
-  setFileLoading: (loading: boolean) => void,
+  operationGate: FileLoadOperationGate,
   archiveResourceOwner: TauriArchiveResourceOwner,
 ) => {
   const handleTauriOpen = async () => {
+    const generation = operationGate.begin()
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const selected = await open({
@@ -47,8 +49,7 @@ export const useTauriBridge = (
       const anchor = selectedPaths[0]
       if (anchor) {
         try {
-          setFileLoading(true)
-          options.onFileLoadingStart()
+          if (!operationGate.startLoading(generation)) return
 
           if (anchor.toLowerCase().endsWith('.zip')) {
             let resourceToken: string | null = null
@@ -63,6 +64,7 @@ export const useTauriBridge = (
                 resource_token?: string | null
               }>('extract_zip_log', { path: anchor, paths: selectedPaths })
               resourceToken = result.resource_token ?? null
+              if (!operationGate.isCurrent(generation)) return
 
               const errorImages = createTauriImageMap(result.error_images)
               const visionImages = createTauriImageMap(result.vision_images)
@@ -71,6 +73,7 @@ export const useTauriBridge = (
               const selectedOptions = options.selectPrimaryLogs
                 ? await options.selectPrimaryLogs(createPrimaryLogSelectionOptions(primaryLogFiles))
                 : createPrimaryLogSelectionOptions(primaryLogFiles)
+              if (!operationGate.isCurrent(generation)) return
               if (!selectedOptions) return
 
               const selectedLogPaths = new Set(selectedOptions.map(option => option.path))
@@ -98,6 +101,7 @@ export const useTauriBridge = (
             registerInputResourceEntry(budget, anchor, 0)
             await chargeTauriRegularFile(anchor, budget)
             const content = decodeFileContent(await readFile(anchor))
+            if (!operationGate.isCurrent(generation)) return
 
             if (content) {
               const fileName = anchor.split(/[/\\]/).pop() || 'loaded.log'
@@ -111,27 +115,27 @@ export const useTauriBridge = (
             }
           }
         } finally {
-          setFileLoading(false)
-          options.onFileLoadingEnd()
+          operationGate.finish(generation)
         }
       }
     } catch (error) {
-      setFileLoading(false)
-      options.onFileLoadingEnd()
-      toastError('打开文件失败: ' + error)
+      if (operationGate.isCurrent(generation)) toastError('打开文件失败: ' + error)
+    } finally {
+      operationGate.finish(generation)
     }
   }
 
   const handleTauriOpenFolder = async () => {
+    const generation = operationGate.begin()
     try {
       const { openFolderDialog } = await import('../../../../utils/fileDialog')
 
-      setFileLoading(true)
-      options.onFileLoadingStart()
+      if (!operationGate.startLoading(generation)) return
 
       const result = await openFolderDialog({
         selectPrimaryLogs: options.selectPrimaryLogs,
       })
+      if (!operationGate.isCurrent(generation)) return
       if (result) {
         options.onUploadContent(
           result.content,
@@ -143,10 +147,9 @@ export const useTauriBridge = (
         )
       }
     } catch (error) {
-      toastError('打开文件夹失败: ' + error)
+      if (operationGate.isCurrent(generation)) toastError('打开文件夹失败: ' + error)
     } finally {
-      setFileLoading(false)
-      options.onFileLoadingEnd()
+      operationGate.finish(generation)
     }
   }
 

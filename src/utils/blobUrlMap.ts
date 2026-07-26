@@ -11,3 +11,11 @@ export const replaceBlobUrl = (
   target.set(key, nextUrl)
   return nextUrl
 }
+
+export const revokeBlobUrlMap = (target?: Map<string, string> | null): void => {
+  if (!target) return
+  for (const url of target.values()) {
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+  }
+  target.clear()
+}
