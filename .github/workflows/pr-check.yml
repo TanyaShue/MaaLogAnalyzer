@@ -38,10 +38,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: 安装 Rust 稳定版
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: 初始化前端工具链
         uses: ./.github/actions/setup-frontend
@@ -65,7 +65,7 @@ jobs:
           npm --prefix src-vscode run compile
 
       - name: Rust 缓存
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: './src-tauri -> target'
 
@@ -86,7 +86,7 @@ jobs:
         run: pnpm run tauri build
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}-build
           path: src-tauri/target/release/bundle/
