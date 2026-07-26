@@ -260,13 +260,13 @@ export class LogParser {
       details: event.details,
       _lineNumber: event._lineNumber,
     }
-    this.events.push(storedEvent)
     const protocolEvent = createProtocolEvent(event, {
       seq: this.protocolEvents.length + 1,
       sourceKey: sourceOptions?.sourceKey,
       sourcePath: sourceOptions?.sourcePath,
       inputIndex: sourceOptions?.inputIndex,
     })
+    this.events.push(storedEvent)
     if (protocolEvent) {
       this.protocolEvents.push(protocolEvent)
       this.traceReducer.append(protocolEvent)

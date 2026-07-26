@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { LogParser } from '../core/logParser'
 import { parseEventLine } from '../event/line'
 
 const identity = (value: string) => value
@@ -37,5 +38,41 @@ describe('EventLine', () => {
       }
     )
     expect(malformed).toBeNull()
+  })
+
+  it.each(['null', '[]', '42', 'true', '"text"'])(
+    'returns null when details is not an object: %s',
+    (details) => {
+      const parsed = parseEventLine(
+        `[2026-04-08 00:01:02.345][INF][Px1][Tx2][test] !!!OnEventNotify!!! [handle=1] [msg=Tasker.Task.Starting] [details=${details}]`,
+        3,
+        {
+          internEventToken: identity,
+          forceCopyString: identity,
+        },
+      )
+
+      expect(parsed).toBeNull()
+    },
+  )
+
+  it('skips invalid details without partially committing an event', async () => {
+    const lines = [
+      '[2026-04-08 00:01:02.001][INF][Px1][Tx2][test] !!!OnEventNotify!!! [handle=1] [msg=Tasker.Task.Starting] [details={"task_id":1,"entry":"Main"}]',
+      '[2026-04-08 00:01:02.002][INF][Px1][Tx2][test] !!!OnEventNotify!!! [handle=1] [msg=Node.PipelineNode.Starting] [details=null]',
+      '[2026-04-08 00:01:02.003][INF][Px1][Tx2][test] !!!OnEventNotify!!! [handle=1] [msg=Tasker.Task.Succeeded] [details={"task_id":1,"entry":"Main"}]',
+    ]
+    const parser = new LogParser()
+
+    await parser.parseFile(lines.join('\n'), undefined, { yieldControl: null })
+
+    expect(parser.getEventsSnapshot().map((event) => event.message)).toEqual([
+      'Tasker.Task.Starting',
+      'Tasker.Task.Succeeded',
+    ])
+    expect(parser.getProtocolEventsSnapshot()).toHaveLength(2)
+    expect(parser.getTasksSnapshot()).toMatchObject([
+      { task_id: 1, status: 'succeeded', nodes: [] },
+    ])
   })
 })

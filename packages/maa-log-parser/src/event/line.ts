@@ -39,12 +39,16 @@ export const parseEventLine = (
   const threadId = options.internEventToken(rawThreadId)
   const msg = options.internEventToken(rawMsg)
 
-  let details: Record<string, any> = {}
+  let parsedDetails: unknown
   try {
-    details = JSON.parse(detailsJson)
+    parsedDetails = JSON.parse(detailsJson)
   } catch {
     return null
   }
+  if (parsedDetails == null || typeof parsedDetails !== 'object' || Array.isArray(parsedDetails)) {
+    return null
+  }
+  const details = parsedDetails as Record<string, any>
 
   return {
     timestamp,
