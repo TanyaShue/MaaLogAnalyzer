@@ -161,7 +161,7 @@ export const queryRawLines = (
   store: RawLineStore | null | undefined,
   options: RawLineQueryOptions = {},
 ): RawLineRecord[] => {
-  if (!store) return []
+  if (!store || options.limit === 0) return []
 
   const sources = options.sourceKey
     ? [store.sources.get(options.sourceKey)].filter((value): value is RawLineSource => value != null)
