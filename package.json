@@ -10,6 +10,10 @@
   },
   "type": "module",
   "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "pnpm": "10.34.5"
+  },
   "scripts": {
     "dev": "npm run build:packages && vite",
     "build": "npm run build:packages && vue-tsc && vite build",
