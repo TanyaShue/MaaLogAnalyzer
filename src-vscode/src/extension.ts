@@ -3,7 +3,19 @@ import * as path from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { copyFile, mkdir } from 'fs/promises'
-import { unzipSync } from 'fflate'
+import {
+  assertExtractedEntriesWithinLimits,
+  assertVSCodeIpcEntriesWithinLimits,
+  canonicalizeArchivePath,
+  classifyNeededArchiveEntry,
+  createArchiveSelection,
+  createStoredEntryMetadata,
+  decodeArchiveText,
+  inspectArchiveVolumes,
+  readSelectedArchiveVolumes,
+  type ArchiveEntryMetadata,
+  type ArchiveVolumeInput,
+} from './archiveReader'
 import {
   gateExternalAnalysisUri,
   type ExternalAnalysisRequest,
@@ -512,14 +524,26 @@ async function analyzeFileUri(uri: vscode.Uri): Promise<void> {
   }
 
   try {
+    const fileName = path.basename(uri.fsPath)
+    const stat = await vscode.workspace.fs.stat(uri)
+    const plannedEntry = createStoredEntryMetadata(uri.fsPath, stat.size)
+    assertExtractedEntriesWithinLimits([plannedEntry])
+    assertVSCodeIpcEntriesWithinLimits([plannedEntry])
+
     const fileContent = await vscode.workspace.fs.readFile(uri)
+    const actualEntry = createStoredEntryMetadata(uri.fsPath, fileContent.byteLength)
+    assertExtractedEntriesWithinLimits([actualEntry])
+    assertVSCodeIpcEntriesWithinLimits([actualEntry])
     const content = new TextDecoder('utf-8').decode(fileContent)
-    const debugAssets = await collectDebugAssetsForBaseDirectory(vscode.Uri.file(path.dirname(uri.fsPath)))
+    const debugAssets = await collectDebugAssetsForBaseDirectory(
+      vscode.Uri.file(path.dirname(uri.fsPath)),
+      [actualEntry],
+    )
 
     currentPanel?.webview.postMessage({
       type: 'loadFile',
       content,
-      fileName: path.basename(uri.fsPath),
+      fileName,
       errorImages: debugAssets.errorImages,
       visionImages: debugAssets.visionImages,
       waitFreezesImages: debugAssets.waitFreezesImages,
@@ -644,15 +668,29 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
     if (!selectedPaths) return
 
     const selectedLogEntries = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
-    const loadedSegments = await Promise.all(selectedLogEntries.map(async ({ item }) => {
+    const selectionEntryByPath = new Map(selectionEntries.map(entry => [entry.path, entry]))
+    const plannedLogEntries = selectedLogEntries.map(({ item }) => {
+      const selectionEntry = selectionEntryByPath.get(item.path)
+      if (!selectionEntry) throw new Error(`缺少日志文件元数据: ${item.path}`)
+      return createStoredEntryMetadata(item.path, selectionEntry.size)
+    })
+    assertExtractedEntriesWithinLimits(plannedLogEntries)
+    assertVSCodeIpcEntriesWithinLimits(plannedLogEntries)
+
+    const loadedSegments: Array<{ path: string; name: string; uri: vscode.Uri; content: string }> = []
+    const actualLogEntries: ArchiveEntryMetadata[] = []
+    for (const { item } of selectedLogEntries) {
       const bytes = await vscode.workspace.fs.readFile(item.uri)
-      return {
+      actualLogEntries.push(createStoredEntryMetadata(item.path, bytes.byteLength))
+      assertExtractedEntriesWithinLimits(actualLogEntries)
+      assertVSCodeIpcEntriesWithinLimits(actualLogEntries)
+      loadedSegments.push({
         path: item.path,
         name: item.name,
         uri: item.uri,
         content: new TextDecoder('utf-8').decode(bytes),
-      }
-    }))
+      })
+    }
 
     const primaryLogFiles = sortLoadedPrimaryLogSegments(loadedSegments)
 
@@ -674,7 +712,7 @@ async function analyzeFolderUri(folderUri: vscode.Uri): Promise<void> {
     const contentBaseDir = targetMain
       ? getParentUri(targetMain)
       : selectedBaseDir
-    const debugAssets = await collectDebugAssetsForBaseDirectory(contentBaseDir)
+    const debugAssets = await collectDebugAssetsForBaseDirectory(contentBaseDir, actualLogEntries)
 
     currentPanel?.webview.postMessage({
       type: 'loadFile',
@@ -699,29 +737,43 @@ async function pathExists(uri: vscode.Uri): Promise<boolean> {
   }
 }
 
-async function readImageDirectoryEntries(
-  dirUri: vscode.Uri,
-  parser: (fileName: string) => string | null,
-): Promise<Array<{ key: string; base64: string }>> {
-  const results: Array<{ key: string; base64: string }> = []
-  if (!(await pathExists(dirUri))) return results
+type DebugImageKind = 'error' | 'vision' | 'wait-freezes'
 
+interface DebugImageCandidate {
+  uri: vscode.Uri
+  name: string
+  key: string
+  kind: DebugImageKind
+  size: number
+}
+
+const bytesToBase64 = (bytes: Uint8Array): string => (
+  Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')
+)
+
+async function listImageDirectoryEntries(
+  dirUri: vscode.Uri,
+  classify: (fileName: string) => { key: string; kind: DebugImageKind } | null,
+): Promise<DebugImageCandidate[]> {
+  if (!(await pathExists(dirUri))) return []
+
+  const candidates: DebugImageCandidate[] = []
   const entries = await vscode.workspace.fs.readDirectory(dirUri)
   for (const [name, type] of entries) {
     if (type !== vscode.FileType.File) continue
-    const key = parser(name)
-    if (!key) continue
-    const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(dirUri, name))
-    results.push({
-      key,
-      base64: Buffer.from(bytes).toString('base64'),
-    })
+    const classified = classify(name)
+    if (!classified) continue
+    const uri = vscode.Uri.joinPath(dirUri, name)
+    const stat = await vscode.workspace.fs.stat(uri)
+    candidates.push({ uri, name, size: stat.size, ...classified })
   }
-
-  return results
+  return candidates
 }
 
-async function collectDebugAssetsForBaseDirectory(baseDirUri: vscode.Uri): Promise<{
+async function collectDebugAssetsForBaseDirectory(
+  baseDirUri: vscode.Uri,
+  initialEntries: readonly ArchiveEntryMetadata[] = [],
+): Promise<{
   errorImages: Array<{ key: string; base64: string }>
   visionImages: Array<{ key: string; base64: string }>
   waitFreezesImages: Array<{ key: string; base64: string }>
@@ -745,17 +797,49 @@ async function collectDebugAssetsForBaseDirectory(baseDirUri: vscode.Uri): Promi
     return { errorImages: [], visionImages: [], waitFreezesImages: [] }
   }
 
-  const errorImages = await readImageDirectoryEntries(
+  const candidates = await listImageDirectoryEntries(
     vscode.Uri.joinPath(debugDirUri, 'on_error'),
-    parseErrorImageKey,
+    (name) => {
+      const key = parseErrorImageKey(name)
+      return key ? { key, kind: 'error' } : null
+    },
   )
   const visionDirUri = vscode.Uri.joinPath(debugDirUri, 'vision')
-  const visionEntries = await readImageDirectoryEntries(visionDirUri, parseVisionImageKey)
-  const waitFreezesImages = await readImageDirectoryEntries(visionDirUri, parseWaitFreezesKey)
+  candidates.push(...await listImageDirectoryEntries(
+    visionDirUri,
+    (name) => {
+      const waitFreezesKey = parseWaitFreezesKey(name)
+      if (waitFreezesKey) return { key: waitFreezesKey, kind: 'wait-freezes' }
+      const visionKey = parseVisionImageKey(name)
+      return visionKey ? { key: visionKey, kind: 'vision' } : null
+    },
+  ))
+
+  const plannedEntries = [
+    ...initialEntries,
+    ...candidates.map(candidate => createStoredEntryMetadata(candidate.uri.path, candidate.size)),
+  ]
+  assertExtractedEntriesWithinLimits(plannedEntries)
+  assertVSCodeIpcEntriesWithinLimits(plannedEntries)
+
+  const errorImages: Array<{ key: string; base64: string }> = []
+  const visionImages: Array<{ key: string; base64: string }> = []
+  const waitFreezesImages: Array<{ key: string; base64: string }> = []
+  const actualEntries = [...initialEntries]
+  for (const candidate of candidates) {
+    const bytes = await vscode.workspace.fs.readFile(candidate.uri)
+    actualEntries.push(createStoredEntryMetadata(candidate.uri.path, bytes.byteLength))
+    assertExtractedEntriesWithinLimits(actualEntries)
+    assertVSCodeIpcEntriesWithinLimits(actualEntries)
+    const entry = { key: candidate.key, base64: bytesToBase64(bytes) }
+    if (candidate.kind === 'error') errorImages.push(entry)
+    else if (candidate.kind === 'vision') visionImages.push(entry)
+    else waitFreezesImages.push(entry)
+  }
 
   return {
     errorImages,
-    visionImages: visionEntries,
+    visionImages,
     waitFreezesImages,
   }
 }
@@ -955,24 +1039,30 @@ async function findFirstMxuZipVolumeUri(directory: vscode.Uri): Promise<vscode.U
   return first ? vscode.Uri.joinPath(directory, first.name) : null
 }
 
-/** 将 ZIP 压缩数据交给 Webview，复用 Web 端归档加载与进度流程。 */
+/**
+ * 在扩展进程内按预算检查并选择性解压 ZIP。
+ * Webview 只接收已筛选的文本与图片，避免完整 ZIP 的 Base64 往返副本。
+ */
 async function handleZipFile(uri: vscode.Uri): Promise<void> {
   try {
     const volumeUris = await collectMxuZipVolumeUris(uri)
-    const entrySizes = new Map<string, number>()
-    const archives = await Promise.all(volumeUris.map(async (volumeUri) => {
-      const bytes = await vscode.workspace.fs.readFile(volumeUri)
-      unzipSync(new Uint8Array(bytes), {
-        filter: (entry) => {
-          entrySizes.set(entry.name, entry.originalSize)
-          return false
-        },
-      })
-      return {
+    const volumeInputs: Array<ArchiveVolumeInput<vscode.Uri>> = await Promise.all(
+      volumeUris.map(async (volumeUri) => ({
+        source: volumeUri,
         name: path.posix.basename(volumeUri.path),
-        base64: Buffer.from(bytes).toString('base64'),
+        size: (await vscode.workspace.fs.stat(volumeUri)).size,
+      })),
+    )
+    const readVolume = (input: ArchiveVolumeInput<vscode.Uri>) => (
+      vscode.workspace.fs.readFile(input.source)
+    )
+    const inspectedVolumes = await inspectArchiveVolumes(volumeInputs, readVolume)
+    const entrySizes = new Map<string, number>()
+    for (const volume of inspectedVolumes) {
+      for (const entry of volume.entries) {
+        entrySizes.set(canonicalizeArchivePath(entry.name), entry.originalSize)
       }
-    }))
+    }
 
     const selectedLogs = selectPrimaryLogGroup(Array.from(entrySizes.keys()).map(filePath => ({
       path: filePath,
@@ -993,10 +1083,73 @@ async function handleZipFile(uri: vscode.Uri): Promise<void> {
     const selectedPaths = await pickPrimaryLogSelection(selectionEntries)
     if (!selectedPaths) return
 
+    const selection = createArchiveSelection(selectedPaths, selectedLogs[0].candidate.dirPath)
+    const primaryLogsByPath = new Map<string, { path: string; name: string; content: string }>()
+    const textFilesByPath = new Map<string, { path: string; name: string; content: string }>()
+    const errorImagesByKey = new Map<string, string>()
+    const visionImagesByKey = new Map<string, string>()
+    const waitFreezesImagesByKey = new Map<string, string>()
+
+    await readSelectedArchiveVolumes(
+      inspectedVolumes,
+      selection,
+      readVolume,
+      (_volume, entries) => {
+        for (const [entryPath, bytes] of entries) {
+          const kind = classifyNeededArchiveEntry(entryPath, selection)
+          if (!kind) continue
+
+          const normalizedPath = canonicalizeArchivePath(entryPath)
+          const name = normalizedPath.split('/').pop() || normalizedPath
+          if (kind === 'primary-log') {
+            primaryLogsByPath.set(normalizedPath, {
+              path: normalizedPath,
+              name,
+              content: decodeArchiveText(bytes),
+            })
+            continue
+          }
+          if (kind === 'text') {
+            textFilesByPath.set(normalizedPath, {
+              path: normalizedPath,
+              name,
+              content: decodeArchiveText(bytes),
+            })
+            continue
+          }
+
+          const base64 = bytesToBase64(bytes)
+          const errorKey = parseErrorImageKey(name)
+          if (errorKey) {
+            errorImagesByKey.set(errorKey, base64)
+            continue
+          }
+          const waitFreezesKey = parseWaitFreezesKey(name)
+          if (waitFreezesKey) {
+            waitFreezesImagesByKey.set(waitFreezesKey, base64)
+            continue
+          }
+          const visionKey = parseVisionImageKey(name)
+          if (visionKey) visionImagesByKey.set(visionKey, base64)
+        }
+      },
+    )
+
+    const primaryLogFiles = sortLoadedPrimaryLogSegments(Array.from(primaryLogsByPath.values()))
+    if (primaryLogFiles.length === 0) {
+      vscode.window.showWarningMessage('ZIP 文件在读取期间发生变化，未能读取到所选日志')
+      return
+    }
+
     currentPanel?.webview.postMessage({
-      type: 'loadArchive',
-      archives,
-      selectedPaths: Array.from(selectedPaths),
+      type: 'loadFile',
+      content: '',
+      fileName: path.posix.basename(uri.path),
+      primaryLogFiles,
+      textFiles: Array.from(textFilesByPath.values()).sort((a, b) => a.path.localeCompare(b.path)),
+      errorImages: Array.from(errorImagesByKey, ([key, base64]) => ({ key, base64 })),
+      visionImages: Array.from(visionImagesByKey, ([key, base64]) => ({ key, base64 })),
+      waitFreezesImages: Array.from(waitFreezesImagesByKey, ([key, base64]) => ({ key, base64 })),
     })
   } catch (error) {
     vscode.window.showErrorMessage(`读取 ZIP 文件失败: ${error}`)

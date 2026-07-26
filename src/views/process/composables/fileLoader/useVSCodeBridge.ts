@@ -1,18 +1,25 @@
 import { onMounted, onUnmounted } from 'vue'
 import { decodeBase64ImageEntries } from '../../utils/fileLoadingHelpers'
+import type { LoadedTextFile } from '../../utils/fileLoadingHelpers'
 import type { LoadedPrimaryLogFile } from '../../../../utils/logFileDiscovery'
 import type { UseProcessFileLoaderOptions } from './types'
 
-interface VSCodeBridgePayload {
+export interface VSCodeBridgePayload {
   type: string
   content?: string
   archives?: Array<{ name: string, base64: string }>
   selectedPaths?: string[]
   primaryLogFiles?: LoadedPrimaryLogFile[]
+  textFiles?: LoadedTextFile[]
   errorImages?: Array<{ key: string, base64: string }>
   visionImages?: Array<{ key: string, base64: string }>
   waitFreezesImages?: Array<{ key: string, base64: string }>
 }
+
+type VSCodeLoadFileOptions = Pick<
+  UseProcessFileLoaderOptions,
+  'onUploadContent' | 'onFileLoadingStart' | 'onFileLoadingEnd'
+>
 
 const decodeBase64Archive = (entry: { name: string, base64: string }): File => {
   const binary = atob(entry.base64)
@@ -21,6 +28,30 @@ const decodeBase64Archive = (entry: { name: string, base64: string }): File => {
     bytes[index] = binary.charCodeAt(index)
   }
   return new File([bytes], entry.name, { type: 'application/zip' })
+}
+
+export const handleVSCodeLoadFilePayload = (
+  message: VSCodeBridgePayload,
+  options: VSCodeLoadFileOptions,
+): boolean => {
+  if (message.type !== 'loadFile' || (!message.content && !message.primaryLogFiles?.length)) {
+    return false
+  }
+
+  options.onFileLoadingStart()
+  const errorImages = decodeBase64ImageEntries(message.errorImages, 'image/png')
+  const visionImages = decodeBase64ImageEntries(message.visionImages, 'image/jpeg')
+  const waitFreezesImages = decodeBase64ImageEntries(message.waitFreezesImages, 'image/jpeg')
+  options.onUploadContent(
+    message.content ?? '',
+    errorImages,
+    visionImages,
+    waitFreezesImages,
+    message.textFiles,
+    message.primaryLogFiles,
+  )
+  options.onFileLoadingEnd()
+  return true
 }
 
 export const useVSCodeBridge = (
@@ -62,15 +93,7 @@ export const useVSCodeBridge = (
       return
     }
 
-    if (message.type === 'loadFile' && (message.content || message.primaryLogFiles?.length)) {
-      options.onFileLoadingStart()
-      const errorImages = decodeBase64ImageEntries(message.errorImages, 'image/png')
-      const visionImages = decodeBase64ImageEntries(message.visionImages, 'image/jpeg')
-      const waitFreezesImages = decodeBase64ImageEntries(message.waitFreezesImages, 'image/jpeg')
-      options.onUploadContent(message.content ?? '', errorImages, visionImages, waitFreezesImages, undefined, message.primaryLogFiles)
-      options.onFileLoadingEnd()
-      return
-    }
+    if (handleVSCodeLoadFilePayload(message, options)) return
 
     if (message.type === 'loadZipFile' && message.content) {
       options.onFileLoadingStart()
