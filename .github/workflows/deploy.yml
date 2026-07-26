@@ -11,11 +11,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: deploy-server
   cancel-in-progress: false
 
 jobs:
@@ -54,11 +52,6 @@ jobs:
 
       - name: 构建
         run: pnpm run build
-
-      - name: 上传构建产物
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
 
       - name: Deploy to Server
         uses: easingthemes/ssh-deploy@a1aa0b6cf96ce2406eef90faa35007a4a7bf0ac0 # v5.1.1
