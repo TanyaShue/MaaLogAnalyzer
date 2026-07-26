@@ -56,6 +56,58 @@ const defaultSettings: AppSettings = {
   flowchartIgnoreUnexecutedNodes: false,
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean'
+
+const isFiniteNumberInRange = (
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is number => {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= minimum
+    && value <= maximum
+}
+
+const normalizeSettings = (value: unknown): AppSettings => {
+  const normalized = { ...defaultSettings }
+  if (!isRecord(value)) return normalized
+
+  const booleanKeys = [
+    'showNotRecognizedNodes',
+    'defaultCollapseRecognition',
+    'defaultCollapseRootActionList',
+    'defaultCollapseNestedRecognition',
+    'defaultCollapseNestedActionNodes',
+    'defaultExpandRawJson',
+    'flowchartEdgeFlowEnabled',
+    'flowchartRelayoutAfterDrag',
+    'flowchartIgnoreUnexecutedNodes',
+  ] as const
+  for (const key of booleanKeys) {
+    if (isBoolean(value[key])) normalized[key] = value[key]
+  }
+
+  if (value.displayMode === 'detailed' || value.displayMode === 'compact' || value.displayMode === 'tree') {
+    normalized.displayMode = value.displayMode
+  }
+  if (value.flowchartEdgeStyle === 'orthogonal' || value.flowchartEdgeStyle === 'default') {
+    normalized.flowchartEdgeStyle = value.flowchartEdgeStyle
+  }
+  if (isFiniteNumberInRange(value.flowchartPlaybackIntervalMs, 50, 60_000)) {
+    normalized.flowchartPlaybackIntervalMs = value.flowchartPlaybackIntervalMs
+  }
+  if (isFiniteNumberInRange(value.flowchartFocusZoom, 0.1, 5)) {
+    normalized.flowchartFocusZoom = value.flowchartFocusZoom
+  }
+
+  return normalized
+}
+
 
 export function getDefaultSettings(): AppSettings {
   return { ...defaultSettings }
@@ -69,7 +121,7 @@ let settingsInstance: AppSettings | null = null
 export function getSettings(): AppSettings {
   if (settingsInstance) return settingsInstance
 
-  let stored: Partial<AppSettings> = {}
+  let stored: unknown = null
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (raw) stored = JSON.parse(raw)
@@ -77,7 +129,7 @@ export function getSettings(): AppSettings {
     console.error('读取设置失败:', error)
   }
 
-  settingsInstance = reactive<AppSettings>({ ...getDefaultSettings(), ...stored })
+  settingsInstance = reactive<AppSettings>(normalizeSettings(stored))
   return settingsInstance
 }
 
@@ -85,13 +137,15 @@ export function getSettings(): AppSettings {
  * 保存设置
  */
 export function saveSettings(settings: AppSettings): void {
+  const normalized = normalizeSettings(settings)
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized))
   } catch (error) {
     console.error('保存设置失败:', error)
   }
+  Object.assign(settings, normalized)
   // 同步更新 reactive 单例
   if (settingsInstance && settingsInstance !== settings) {
-    Object.assign(settingsInstance, settings)
+    Object.assign(settingsInstance, normalized)
   }
 }
