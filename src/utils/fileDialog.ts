@@ -9,6 +9,7 @@ import { decodeFileContent } from './textEncoding'
 import { invoke } from '@tauri-apps/api/core'
 import { joinNativePath } from './nativePath'
 import { replaceBlobUrl } from './blobUrlMap'
+import { releaseTauriArchiveResource } from './tauriArchiveResources'
 import {
   combineLoadedPrimaryLogSegments,
   createPrimaryLogSelectionOptions,
@@ -136,12 +137,18 @@ async function openArchiveFileWithTauri(path: string, paths: string[]): Promise<
   const result = await invoke<{
     content: string
     primary_log_files: LoadedPrimaryLogFile[]
+    resource_token?: string | null
   }>('extract_zip_log', { path, paths })
-
-  // Rust extract_zip_log returns empty content; real logs live in primary_log_files
-  const primaryLogFiles = result.primary_log_files ?? []
-  if (primaryLogFiles.length === 0) return null
-  return combineLoadedPrimaryLogSegments(primaryLogFiles)
+  try {
+    // Rust extract_zip_log returns empty content; real logs live in primary_log_files
+    const primaryLogFiles = result.primary_log_files ?? []
+    if (primaryLogFiles.length === 0) return null
+    return combineLoadedPrimaryLogSegments(primaryLogFiles)
+  } finally {
+    await releaseTauriArchiveResource(result.resource_token).catch((error) => {
+      console.warn('Failed to release unused Tauri archive images:', error)
+    })
+  }
 }
 
 /**

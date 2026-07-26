@@ -8,6 +8,10 @@ import {
   sortLoadedPrimaryLogSegments,
   type LoadedPrimaryLogFile,
 } from '../../../../utils/logFileDiscovery'
+import {
+  releaseTauriArchiveResource,
+  type TauriArchiveResourceOwner,
+} from '../../../../utils/tauriArchiveResources'
 
 const createTauriImageMap = (entries: Record<string, string>) => {
   const result = new Map<string, string>()
@@ -20,6 +24,7 @@ const createTauriImageMap = (entries: Record<string, string>) => {
 export const useTauriBridge = (
   options: UseProcessFileLoaderOptions,
   setFileLoading: (loading: boolean) => void,
+  archiveResourceOwner: TauriArchiveResourceOwner,
 ) => {
   const handleTauriOpen = async () => {
     try {
@@ -42,35 +47,47 @@ export const useTauriBridge = (
           options.onFileLoadingStart()
 
           if (anchor.toLowerCase().endsWith('.zip')) {
-            const result = await invoke<{
-              content: string
-              primary_log_files: LoadedPrimaryLogFile[]
-              error_images: Record<string, string>
-              vision_images: Record<string, string>
-              wait_freezes_images: Record<string, string>
-            }>('extract_zip_log', { path: anchor, paths: selectedPaths })
+            let resourceToken: string | null = null
+            let adoptedResource = false
+            try {
+              const result = await invoke<{
+                content: string
+                primary_log_files: LoadedPrimaryLogFile[]
+                error_images: Record<string, string>
+                vision_images: Record<string, string>
+                wait_freezes_images: Record<string, string>
+                resource_token?: string | null
+              }>('extract_zip_log', { path: anchor, paths: selectedPaths })
+              resourceToken = result.resource_token ?? null
 
-            const errorImages = createTauriImageMap(result.error_images)
-            const visionImages = createTauriImageMap(result.vision_images)
-            const waitFreezesImages = createTauriImageMap(result.wait_freezes_images)
-            const primaryLogFiles = sortLoadedPrimaryLogSegments(result.primary_log_files ?? [])
-            const selectedOptions = options.selectPrimaryLogs
-              ? await options.selectPrimaryLogs(createPrimaryLogSelectionOptions(primaryLogFiles))
-              : createPrimaryLogSelectionOptions(primaryLogFiles)
-            if (!selectedOptions) return
+              const errorImages = createTauriImageMap(result.error_images)
+              const visionImages = createTauriImageMap(result.vision_images)
+              const waitFreezesImages = createTauriImageMap(result.wait_freezes_images)
+              const primaryLogFiles = sortLoadedPrimaryLogSegments(result.primary_log_files ?? [])
+              const selectedOptions = options.selectPrimaryLogs
+                ? await options.selectPrimaryLogs(createPrimaryLogSelectionOptions(primaryLogFiles))
+                : createPrimaryLogSelectionOptions(primaryLogFiles)
+              if (!selectedOptions) return
 
-            const selectedLogPaths = new Set(selectedOptions.map(option => option.path))
-            const selectedPrimaryLogFiles = primaryLogFiles.filter(file => selectedLogPaths.has(file.path))
-            if (selectedPrimaryLogFiles.length === 0) return
+              const selectedLogPaths = new Set(selectedOptions.map(option => option.path))
+              const selectedPrimaryLogFiles = primaryLogFiles.filter(file => selectedLogPaths.has(file.path))
+              if (selectedPrimaryLogFiles.length === 0) return
 
-            options.onUploadContent(
-              result.content,
-              errorImages,
-              visionImages,
-              waitFreezesImages,
-              undefined,
-              selectedPrimaryLogFiles,
-            )
+              options.onUploadContent(
+                result.content,
+                errorImages,
+                visionImages,
+                waitFreezesImages,
+                undefined,
+                selectedPrimaryLogFiles,
+              )
+              await archiveResourceOwner.replace(resourceToken)
+              adoptedResource = true
+            } finally {
+              if (resourceToken && !adoptedResource) {
+                await releaseTauriArchiveResource(resourceToken)
+              }
+            }
           } else {
             const { readFile } = await import('@tauri-apps/plugin-fs')
             const content = decodeFileContent(await readFile(anchor))

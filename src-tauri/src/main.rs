@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Mutex;
 
 use tauri::Manager;
 use tauri_plugin_fs::FsExt;
@@ -14,10 +15,11 @@ use serde::Serialize;
 mod archive_safety;
 
 use archive_safety::{
-    add_archive_entry_count, canonicalize_archive_entry_path, create_private_output_file,
-    create_private_temp_directory, inspect_zip_directory, validate_archive_entry_path,
-    validate_archive_inputs, validate_authorized_archive_paths, ArchiveLimitKind,
-    ArchivePreflightBudget, ArchiveRuntimeBudget, ArchiveSnapshotWorkspace, ARCHIVE_LIMITS,
+    add_archive_entry_count, canonicalize_archive_entry_path, create_private_child_directory,
+    create_private_output_file, create_private_temp_directory, inspect_zip_directory,
+    validate_archive_entry_path, validate_archive_inputs, validate_authorized_archive_paths,
+    ArchiveLimitKind, ArchivePreflightBudget, ArchiveRuntimeBudget, ArchiveSnapshotWorkspace,
+    ARCHIVE_LIMITS,
 };
 
 const PRIMARY_LOG_FILE_HINT: &str = "maa.log / maa.bak*.log / maafw.log / maafw.bak*.log";
@@ -59,6 +61,7 @@ struct ArchiveExtractResult {
     error_images: HashMap<String, String>,
     vision_images: HashMap<String, String>,
     wait_freezes_images: HashMap<String, String>,
+    resource_token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -72,6 +75,28 @@ struct ZipEntryMetadata {
 #[derive(Default)]
 struct ArchiveExtractionState {
     extraction_in_progress: AtomicBool,
+    assets: Mutex<ArchiveAssetStore>,
+}
+
+#[derive(Default)]
+struct ArchiveAssetStore {
+    root: Option<PathBuf>,
+    resources: HashMap<String, PathBuf>,
+    next_resource_id: u64,
+}
+
+struct PendingArchiveResource {
+    token: String,
+    directory: PathBuf,
+    committed: bool,
+}
+
+impl Drop for PendingArchiveResource {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
 }
 
 impl ArchiveExtractionState {
@@ -87,6 +112,90 @@ impl ArchiveExtractionState {
         Ok(ArchiveExtractionGuard {
             in_progress: &self.extraction_in_progress,
         })
+    }
+
+    fn create_pending_resource(
+        &self,
+        app: &tauri::AppHandle,
+    ) -> Result<PendingArchiveResource, String> {
+        let mut assets = self
+            .assets
+            .lock()
+            .map_err(|_| "Archive asset state is unavailable".to_string())?;
+        if assets.root.is_none() {
+            let root = create_private_temp_directory("assets")?;
+            if let Err(error) = app.asset_protocol_scope().allow_directory(&root, true) {
+                let _ = std::fs::remove_dir_all(&root);
+                return Err(format!("Failed to authorize extracted image root: {error}"));
+            }
+            assets.root = Some(root);
+        }
+
+        assets.next_resource_id = assets
+            .next_resource_id
+            .checked_add(1)
+            .ok_or_else(|| "Archive resource token sequence overflowed".to_string())?;
+        let token = format!("resource-{:016x}", assets.next_resource_id);
+        let root = assets
+            .root
+            .as_ref()
+            .ok_or_else(|| "Archive asset root is unavailable".to_string())?;
+        let directory = create_private_child_directory(root, &token)?;
+        Ok(PendingArchiveResource {
+            token,
+            directory,
+            committed: false,
+        })
+    }
+
+    fn commit_resource(&self, mut resource: PendingArchiveResource) -> Result<String, String> {
+        let mut assets = self
+            .assets
+            .lock()
+            .map_err(|_| "Archive asset state is unavailable".to_string())?;
+        if assets.resources.contains_key(&resource.token) {
+            return Err("Archive resource token already exists".to_string());
+        }
+        assets
+            .resources
+            .insert(resource.token.clone(), resource.directory.clone());
+        resource.committed = true;
+        Ok(resource.token.clone())
+    }
+
+    fn release_resource(&self, token: &str) -> Result<(), String> {
+        let directory = {
+            let mut assets = self
+                .assets
+                .lock()
+                .map_err(|_| "Archive asset state is unavailable".to_string())?;
+            assets.resources.remove(token)
+        };
+        let Some(directory) = directory else {
+            return Ok(());
+        };
+
+        match std::fs::remove_dir_all(&directory) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                if let Ok(mut assets) = self.assets.lock() {
+                    assets.resources.insert(token.to_string(), directory);
+                }
+                Err(format!("Failed to remove archive resource: {error}"))
+            }
+        }
+    }
+}
+
+impl Drop for ArchiveExtractionState {
+    fn drop(&mut self) {
+        if let Ok(assets) = self.assets.get_mut() {
+            if let Some(root) = assets.root.take() {
+                let _ = std::fs::remove_dir_all(root);
+            }
+            assets.resources.clear();
+        }
     }
 }
 
@@ -277,11 +386,20 @@ fn extract_zip_log(
     paths: Option<Vec<String>>,
 ) -> Result<ArchiveExtractResult, String> {
     let _operation_guard = resources.try_start_extraction()?;
-    extract_zip_log_inner(&app, &path, paths)
+    extract_zip_log_inner(&app, &resources, &path, paths)
+}
+
+#[tauri::command]
+fn release_archive_resource(
+    resources: tauri::State<'_, ArchiveExtractionState>,
+    token: String,
+) -> Result<(), String> {
+    resources.release_resource(&token)
 }
 
 fn extract_zip_log_inner(
     app: &tauri::AppHandle,
+    resources: &ArchiveExtractionState,
     path: &str,
     paths: Option<Vec<String>>,
 ) -> Result<ArchiveExtractResult, String> {
@@ -406,12 +524,8 @@ fn extract_zip_log_inner(
         }
     }
 
-    let temp_dir = if has_selected_images {
-        let directory = create_zip_temp_dir(path)?;
-        app.asset_protocol_scope()
-            .allow_directory(&directory, false)
-            .map_err(|error| format!("Failed to authorize extracted image directory: {error}"))?;
-        Some(directory)
+    let mut pending_resource = if has_selected_images {
+        Some(resources.create_pending_resource(app)?)
     } else {
         None
     };
@@ -462,8 +576,9 @@ fn extract_zip_log_inner(
                 if let Some(key) = parse_error_image_key(file_name) {
                     let saved_path = save_zip_entry_to_temp_file(
                         &mut entry,
-                        temp_dir
-                            .as_deref()
+                        pending_resource
+                            .as_ref()
+                            .map(|resource| resource.directory.as_path())
                             .ok_or_else(|| "ZIP image directory is unavailable".to_string())?,
                         &mut temp_seq,
                         "png",
@@ -476,8 +591,9 @@ fn extract_zip_log_inner(
                 if let Some(key) = parse_wait_freezes_key(file_name) {
                     let saved_path = save_zip_entry_to_temp_file(
                         &mut entry,
-                        temp_dir
-                            .as_deref()
+                        pending_resource
+                            .as_ref()
+                            .map(|resource| resource.directory.as_path())
                             .ok_or_else(|| "ZIP image directory is unavailable".to_string())?,
                         &mut temp_seq,
                         "jpg",
@@ -487,8 +603,9 @@ fn extract_zip_log_inner(
                 } else if let Some(key) = parse_vision_image_key(file_name) {
                     let saved_path = save_zip_entry_to_temp_file(
                         &mut entry,
-                        temp_dir
-                            .as_deref()
+                        pending_resource
+                            .as_ref()
+                            .map(|resource| resource.directory.as_path())
                             .ok_or_else(|| "ZIP image directory is unavailable".to_string())?,
                         &mut temp_seq,
                         "jpg",
@@ -516,17 +633,25 @@ fn extract_zip_log_inner(
         return Err("ZIP 中未找到有效的日志内容".to_string());
     }
 
+    let has_extracted_images =
+        !error_images.is_empty() || !vision_images.is_empty() || !wait_freezes_images.is_empty();
+    let resource_token = if has_extracted_images {
+        let resource = pending_resource
+            .take()
+            .ok_or_else(|| "ZIP image resource is unavailable".to_string())?;
+        Some(resources.commit_resource(resource)?)
+    } else {
+        None
+    };
+
     Ok(ArchiveExtractResult {
         content: String::new(),
         primary_log_files,
         error_images,
         vision_images,
         wait_freezes_images,
+        resource_token,
     })
-}
-
-fn create_zip_temp_dir(zip_path: &str) -> Result<PathBuf, String> {
-    create_private_temp_directory(zip_path)
 }
 
 fn save_zip_entry_to_temp_file(
@@ -810,7 +935,10 @@ fn main() {
         .manage(ArchiveExtractionState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![extract_zip_log])
+        .invoke_handler(tauri::generate_handler![
+            extract_zip_log,
+            release_archive_resource
+        ])
         .setup(|_app| {
             #[cfg(debug_assertions)]
             {
@@ -831,8 +959,9 @@ mod tests {
     use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
     use super::{
-        parse_mxu_zip_volume_name, register_archive_entry_path, resolve_archive_paths,
-        validate_zip_entry, ArchiveExtractionState,
+        create_private_child_directory, create_private_temp_directory, parse_mxu_zip_volume_name,
+        register_archive_entry_path, resolve_archive_paths, validate_zip_entry,
+        ArchiveExtractionState, PendingArchiveResource,
     };
 
     fn archive_with_file(name: &str) -> ZipArchive<Cursor<Vec<u8>>> {
@@ -982,5 +1111,48 @@ mod tests {
 
         drop(first);
         assert!(resources.try_start_extraction().is_ok());
+    }
+
+    #[test]
+    fn releases_committed_resources_and_cleans_the_root_on_drop() {
+        let root = create_private_temp_directory("resource-state-test").unwrap();
+        let first = create_private_child_directory(&root, "resource-0001").unwrap();
+        let second = create_private_child_directory(&root, "resource-0002").unwrap();
+
+        {
+            let resources = ArchiveExtractionState::default();
+            {
+                let mut assets = resources.assets.lock().unwrap();
+                assets.root = Some(root.clone());
+                assets
+                    .resources
+                    .insert("resource-0001".to_string(), first.clone());
+                assets
+                    .resources
+                    .insert("resource-0002".to_string(), second.clone());
+            }
+
+            resources.release_resource("missing").unwrap();
+            resources.release_resource("resource-0001").unwrap();
+            assert!(!first.exists());
+            assert!(second.exists());
+        }
+
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn removes_uncommitted_resources_on_failure() {
+        let root = create_private_temp_directory("pending-resource-test").unwrap();
+        let directory = create_private_child_directory(&root, "resource-0001").unwrap();
+        {
+            let _pending = PendingArchiveResource {
+                token: "resource-0001".to_string(),
+                directory: directory.clone(),
+                committed: false,
+            };
+        }
+        assert!(!directory.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

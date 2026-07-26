@@ -892,6 +892,43 @@ pub(crate) fn create_private_temp_directory(label: &str) -> Result<PathBuf, Stri
     Err("创建唯一临时目录失败".to_string())
 }
 
+pub(crate) fn create_private_child_directory(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    if name.is_empty()
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err("Private child directory name is invalid".to_string());
+    }
+
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| format!("无法复核临时资源根目录: {error}"))?;
+    if !parent_metadata.is_dir() || parent_metadata.file_type().is_symlink() {
+        return Err("Private resource root is not a directory".to_string());
+    }
+    reject_windows_reparse(&parent_metadata, parent)?;
+
+    let path = parent.join(name);
+    #[cfg(unix)]
+    let create_result = {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(&path)
+    };
+    #[cfg(not(unix))]
+    let create_result = std::fs::create_dir(&path);
+    create_result.map_err(|error| format!("创建私有临时资源目录失败: {error}"))?;
+
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("无法复核临时资源目录: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        let _ = std::fs::remove_dir_all(&path);
+        return Err("Private resource path is not a directory".to_string());
+    }
+    reject_windows_reparse(&metadata, &path)?;
+    Ok(path)
+}
+
 pub(crate) fn create_private_output_file(path: &Path) -> Result<File, String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -1030,10 +1067,11 @@ mod tests {
     use super::create_private_output_file;
     use super::{
         add_archive_entry_count, canonicalize_archive_entry_path, copy_snapshot_bytes,
-        create_private_temp_directory, has_windows_reparse_attribute, inspect_zip_directory,
-        validate_archive_entry_path, validate_archive_inputs, validate_authorized_archive_paths,
-        ArchiveLimitKind, ArchiveLimits, ArchivePreflightBudget, ArchiveRuntimeBudget,
-        ArchiveSnapshotWorkspace, ARCHIVE_LIMITS,
+        create_private_child_directory, create_private_temp_directory,
+        has_windows_reparse_attribute, inspect_zip_directory, validate_archive_entry_path,
+        validate_archive_inputs, validate_authorized_archive_paths, ArchiveLimitKind,
+        ArchiveLimits, ArchivePreflightBudget, ArchiveRuntimeBudget, ArchiveSnapshotWorkspace,
+        ARCHIVE_LIMITS,
     };
 
     fn test_limits() -> ArchiveLimits {
@@ -1276,6 +1314,17 @@ mod tests {
         drop(snapshot);
         drop(workspace);
         std::fs::remove_dir_all(source_directory).unwrap();
+    }
+
+    #[test]
+    fn creates_private_children_only_below_the_resource_root() {
+        let root = create_private_temp_directory("child-test").unwrap();
+        let child = create_private_child_directory(&root, "resource-0001").unwrap();
+        assert_eq!(child.parent(), Some(root.as_path()));
+        assert!(child.is_dir());
+        assert!(create_private_child_directory(&root, "../escape").is_err());
+        assert!(create_private_child_directory(&root, "nested/path").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1,12 +1,28 @@
-import { h, ref } from 'vue'
+import { h, onUnmounted, ref } from 'vue'
 import { FileOutlined, FolderOutlined } from '@vicons/antd'
 import type { UseProcessFileLoaderOptions } from './fileLoader/types'
 import { useWebFileInputs } from './fileLoader/useWebFileInputs'
 import { useVSCodeBridge } from './fileLoader/useVSCodeBridge'
 import { useTauriBridge } from './fileLoader/useTauriBridge'
+import { createTauriArchiveResourceOwner } from '../../../utils/tauriArchiveResources'
 
 export const useProcessFileLoader = (options: UseProcessFileLoaderOptions) => {
   const fileLoading = ref(false)
+  const archiveResourceOwner = createTauriArchiveResourceOwner()
+  const releaseArchiveResource = () => {
+    void archiveResourceOwner.release()
+  }
+  const lifecycleOptions: UseProcessFileLoaderOptions = {
+    ...options,
+    onUploadFile: (...args) => {
+      releaseArchiveResource()
+      options.onUploadFile(...args)
+    },
+    onUploadContent: (...args) => {
+      releaseArchiveResource()
+      options.onUploadContent(...args)
+    },
+  }
   const setFileLoading = (loading: boolean) => {
     fileLoading.value = loading
   }
@@ -20,17 +36,21 @@ export const useProcessFileLoader = (options: UseProcessFileLoaderOptions) => {
     handleFileInputChange,
     triggerFolderSelect,
     triggerFileSelect,
-  } = useWebFileInputs(options, setFileLoading)
+  } = useWebFileInputs(lifecycleOptions, setFileLoading)
 
   const {
     handleVSCodeOpen,
     handleVSCodeOpenFolder,
-  } = useVSCodeBridge(options, () => options.isInVSCode.value)
+  } = useVSCodeBridge(lifecycleOptions, () => options.isInVSCode.value)
 
   const {
     handleTauriOpen,
     handleTauriOpenFolder,
-  } = useTauriBridge(options, setFileLoading)
+  } = useTauriBridge(lifecycleOptions, setFileLoading, archiveResourceOwner)
+
+  onUnmounted(() => {
+    void archiveResourceOwner.dispose()
+  })
 
   const reloadOptions = [
     {

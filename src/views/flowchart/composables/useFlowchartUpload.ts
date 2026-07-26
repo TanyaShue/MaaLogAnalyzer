@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { onUnmounted, ref } from 'vue'
 import { toastWarning } from '../../../utils/toast'
 import { isTauri } from '../../../utils/platform'
 import { decodeFileContent } from '../../../utils/textEncoding'
@@ -18,6 +18,10 @@ import {
   collectMxuZipVolumes,
   findMxuZipVolumes,
 } from '../../../utils/mxuZipVolumes'
+import {
+  createTauriArchiveResourceOwner,
+  releaseTauriArchiveResource,
+} from '../../../utils/tauriArchiveResources'
 
 interface UseFlowchartUploadOptions {
   onUploadFile: (file: File | File[]) => void
@@ -37,6 +41,7 @@ export const useFlowchartUpload = ({
 }: UseFlowchartUploadOptions) => {
   const fileInputRef = ref<HTMLInputElement | null>(null)
   const folderInputRef = ref<HTMLInputElement | null>(null)
+  const archiveResourceOwner = createTauriArchiveResourceOwner()
 
   const uploadOptions = [
     { label: '选择文件', key: 'file' },
@@ -50,22 +55,39 @@ export const useFlowchartUpload = ({
     return volumes.length > 1 ? volumes : anchor
   }
 
-  function emitUploadContent(
+  async function emitUploadContent(
     content: string,
     errorImages: Map<string, string>,
     visionImages: Map<string, string>,
     waitFreezesImages: Map<string, string>,
     textFiles?: LoadedTextFile[],
     primaryLogFiles?: LoadedPrimaryLogFile[],
+    resourceToken?: string | null,
   ) {
-    onUploadContent(
-      content,
-      errorImages.size > 0 ? errorImages : undefined,
-      visionImages.size > 0 ? visionImages : undefined,
-      waitFreezesImages.size > 0 ? waitFreezesImages : undefined,
-      textFiles,
-      primaryLogFiles,
-    )
+    let adoptedResource = false
+    const releasePrevious = archiveResourceOwner.release()
+    try {
+      onUploadContent(
+        content,
+        errorImages.size > 0 ? errorImages : undefined,
+        visionImages.size > 0 ? visionImages : undefined,
+        waitFreezesImages.size > 0 ? waitFreezesImages : undefined,
+        textFiles,
+        primaryLogFiles,
+      )
+      await releasePrevious
+      await archiveResourceOwner.replace(resourceToken)
+      adoptedResource = true
+    } finally {
+      if (resourceToken && !adoptedResource) {
+        await releaseTauriArchiveResource(resourceToken)
+      }
+    }
+  }
+
+  const emitUploadFile = (file: File | File[]) => {
+    void archiveResourceOwner.release()
+    onUploadFile(file)
   }
 
   function handleUploadSelect(key: string) {
@@ -142,25 +164,28 @@ export const useFlowchartUpload = ({
             error_images: Record<string, string>
             vision_images: Record<string, string>
             wait_freezes_images: Record<string, string>
+            resource_token?: string | null
           }>('extract_zip_log', { path, paths: selectedPaths })
-          emitUploadContent(
+          await emitUploadContent(
             result.content,
             toImageMap(result.error_images),
             toImageMap(result.vision_images),
             toImageMap(result.wait_freezes_images),
             undefined,
             sortLoadedPrimaryLogSegments(result.primary_log_files ?? []),
+            result.resource_token,
           )
         } else {
           const { readFile } = await import('@tauri-apps/plugin-fs')
           const content = decodeFileContent(await readFile(path))
+          await archiveResourceOwner.release()
           onUploadContent(content)
         }
       } else {
         const { openFolderDialog } = await import('../../../utils/fileDialog')
         const result = await openFolderDialog()
         if (!result) return
-        emitUploadContent(
+        await emitUploadContent(
           result.content,
           result.errorImages,
           result.visionImages,
@@ -178,7 +203,7 @@ export const useFlowchartUpload = ({
     const input = event.target as HTMLInputElement
     const files = Array.from(input.files ?? [])
     const file = files[0]
-    if (file) onUploadFile(getMxuZipUpload(files, file))
+    if (file) emitUploadFile(getMxuZipUpload(files, file))
     input.value = ''
   }
 
@@ -191,7 +216,7 @@ export const useFlowchartUpload = ({
     if (primaryLogFiles.length === 0) {
       const volumes = findMxuZipVolumes(files)
       if (volumes.length > 0) {
-        onUploadFile(volumes.length > 1 ? volumes : volumes[0])
+        emitUploadFile(volumes.length > 1 ? volumes : volumes[0])
         input.value = ''
         return
       }
@@ -220,10 +245,14 @@ export const useFlowchartUpload = ({
 
     if (primaryLogFiles.length > 0) {
       const textFiles = await collectTextFilesFromFiles(scopedFiles)
-      emitUploadContent('', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles)
+      await emitUploadContent('', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles)
     }
     input.value = ''
   }
+
+  onUnmounted(() => {
+    void archiveResourceOwner.dispose()
+  })
 
   return {
     fileInputRef,
