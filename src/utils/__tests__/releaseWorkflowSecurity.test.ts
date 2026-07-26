@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { isValidReleaseVersion } from '../../../scripts/sync-version.mjs'
 
 const readWorkflow = (name: string): string => (
   readFileSync(new URL(`../../../.github/workflows/${name}`, import.meta.url), 'utf8')
@@ -38,23 +39,23 @@ describe('release workflow shell safety', () => {
     expect(runScripts).toContain('GITHUB_REF')
   })
 
-  it('accepts semantic release tags and rejects shell metacharacters', () => {
-    const workflows = `${readWorkflow('build.yml')}\n${readWorkflow('release-vscode.yml')}`
-    const bashPatterns = [...workflows.matchAll(/tag_pattern='([^']+)'/g)]
-      .map(match => match[1]!)
-    const powershellPattern = /\$tag -notmatch '([^']+)'/.exec(workflows)?.[1]
+  it('delegates manifest updates and tag validation to the shared version command', () => {
+    const workflows = [
+      readWorkflow('build.yml'),
+      readWorkflow('release-vscode.yml'),
+      readWorkflow('deploy.yml'),
+    ].join('\n')
 
-    expect(bashPatterns).toHaveLength(3)
-    expect(new Set([...bashPatterns, powershellPattern])).toHaveLength(1)
-
-    const pattern = new RegExp(bashPatterns[0]!)
-    expect(['v3.5.0', 'v3.5.0-rc.1', 'v3.5.0+build.7'].every(tag => pattern.test(tag))).toBe(true)
+    expect(workflows.match(/pnpm run version --/g)).toHaveLength(5)
+    expect(workflows).not.toContain('npm pkg set')
+    expect(workflows).not.toMatch(/sed -i.*version/)
+    expect(['3.5.0', '3.5.0-rc.1', '3.5.0+build.7'].every(isValidReleaseVersion)).toBe(true)
     expect([
-      'v1.2.3;id',
-      'v1.2.3$(id)',
-      'v1.2.3";whoami;#',
+      '1.2.3;id',
+      '1.2.3$(id)',
+      '1.2.3";whoami;#',
       'main',
-    ].every(tag => !pattern.test(tag))).toBe(true)
+    ].every(version => !isValidReleaseVersion(version))).toBe(true)
   })
 
   it('creates desktop releases only for version tags', () => {

@@ -48,7 +48,7 @@ jobs:
           ver=$(git describe --tags --long --match "v*" 2>/dev/null || echo "v0.0.1-0-g$(git rev-parse --short HEAD)")
           ver=${ver#v}
           echo "Setting version to ${ver}"
-          npm pkg set version=${ver}
+          pnpm run version -- "${ver}"
 
       - name: 构建
         run: pnpm run build
