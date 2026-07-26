@@ -10,11 +10,9 @@ import type {
   WaitFreezesDetail,
 } from '../shared/types'
 import { toTimestampMs } from '../shared/timestamp'
-import {
-  findImageByTimestampSuffix,
-  findWaitFreezesImages,
-} from '../event/imageLookupHelpers'
+import { findImageByTimestampSuffix } from '../event/imageLookupHelpers'
 import type { ScopeNode, ScopeStatus } from '../trace/scopeTypes'
+import { buildWaitFreezesImageAssignments } from './waitFreezesImageProjector'
 
 /**
  * Strict trace projector.
@@ -52,6 +50,10 @@ export interface ProjectTasksFromTraceOptions {
   errorImages?: Map<string, string>
   visionImages?: Map<string, string>
   waitFreezesImages?: Map<string, string>
+}
+
+interface InternalProjectTasksFromTraceOptions extends ProjectTasksFromTraceOptions {
+  waitFreezesImagesByScopeId: ReadonlyMap<string, readonly string[]>
 }
 
 const EMPTY_IMAGE_MAP = new Map<string, string>()
@@ -296,6 +298,10 @@ const normalizeWaitFreezesDetail = (
     ? payload.recoIds.filter((value): value is number => typeof value === 'number')
     : undefined
 
+  const images = (options as Partial<InternalProjectTasksFromTraceOptions>)
+    .waitFreezesImagesByScopeId
+    ?.get(scope.id)
+
   return {
     wf_id: readScopeWaitFreezesId(scope) ?? 0,
     phase: readStringField(payload, 'waitPhase', 'phase'),
@@ -304,11 +310,7 @@ const normalizeWaitFreezesDetail = (
     roi,
     param: readRecord(payload.param) as WaitFreezesDetail['param'] | undefined,
     focus: payload.focus,
-    images: findWaitFreezesImages(
-      options.waitFreezesImages ?? EMPTY_IMAGE_MAP,
-      scope.endTs ?? scope.ts,
-      readScopeName(scope),
-    ),
+    images: images ? [...images] : undefined,
   }
 }
 
@@ -1018,6 +1020,13 @@ export const projectTasksFromTrace = (
   root: ScopeNode,
   options: ProjectTasksFromTraceOptions = {},
 ): TaskInfo[] => {
+  const projectionOptions: InternalProjectTasksFromTraceOptions = {
+    ...options,
+    waitFreezesImagesByScopeId: buildWaitFreezesImageAssignments(
+      root,
+      options.waitFreezesImages ?? EMPTY_IMAGE_MAP,
+    ),
+  }
   const taskScopes: ScopeNode[] = []
   collectTaskScopes(root, taskScopes)
   const sortedTaskScopes = sortScopesBySeq(taskScopes)
@@ -1028,13 +1037,13 @@ export const projectTasksFromTrace = (
       seq: scope.seq,
       task: projectTaskScopeWithCache(
         scope,
-        options,
+        projectionOptions,
         nextOccurrenceSeqByScope.get(scope),
       ),
     }))
 
   const rootResourceTaskEntries = collectRootResourceScopeGroups(root)
-    .map((groupedScopes, groupIndex) => projectRootResourceTaskEntry(groupedScopes, options, groupIndex))
+    .map((groupedScopes, groupIndex) => projectRootResourceTaskEntry(groupedScopes, projectionOptions, groupIndex))
     .filter((entry): entry is ProjectedTaskEntry => !!entry)
 
   return [...projectedTaskEntries, ...rootResourceTaskEntries]
