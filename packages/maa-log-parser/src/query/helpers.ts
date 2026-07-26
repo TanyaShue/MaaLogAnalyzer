@@ -124,26 +124,6 @@ const resolveNodeExecutions = (
   return ok(executions)
 }
 
-const scopeContainsSeq = (
-  scope: ScopeNode,
-  seq: number,
-): boolean => {
-  const endSeq = scope.endSeq ?? scope.seq
-  return seq >= scope.seq && seq <= endSeq
-}
-
-const findInnermostScopeAtSeq = (
-  scope: ScopeNode,
-  seq: number,
-): ScopeNode => {
-  const sortedChildren = [...scope.children].sort((left, right) => left.seq - right.seq)
-  for (const child of sortedChildren) {
-    if (!scopeContainsSeq(child, seq)) continue
-    return findInnermostScopeAtSeq(child, seq)
-  }
-  return scope
-}
-
 const readScopeName = (scope: ScopeNode): string | undefined => {
   const payload = scope.payload as Record<string, unknown> | null | undefined
   if (!payload) return undefined
@@ -174,30 +154,65 @@ const collectScopesByKind = (
   }
 }
 
+interface ScopeEventEntry {
+  event: ProtocolEvent
+  scope: ScopeNode
+}
+
+const collectScopeEventEntries = (
+  index: TraceIndex,
+  scopeId: string,
+): QueryResult<ScopeEventEntry[]> => {
+  const scope = index.scopeById.get(scopeId)
+  if (!scope) {
+    return fail('not_found', `scope not found: ${scopeId}`)
+  }
+
+  const entriesBySeq = new Map<number, ScopeEventEntry>()
+  const visit = (current: ScopeNode): void => {
+    if (current.kind !== 'trace_root') {
+      const startEvent = index.eventBySeq.get(current.seq)
+      if (startEvent) {
+        entriesBySeq.set(current.seq, { event: startEvent, scope: current })
+      }
+    }
+
+    for (const child of current.children) {
+      visit(child)
+    }
+
+    if (current.kind !== 'trace_root' && current.endSeq != null && current.endSeq !== current.seq) {
+      const endEvent = index.eventBySeq.get(current.endSeq)
+      if (endEvent) {
+        entriesBySeq.set(current.endSeq, { event: endEvent, scope: current })
+      }
+    }
+  }
+
+  visit(scope)
+  return ok([...entriesBySeq.values()].sort((left, right) => left.event.seq - right.event.seq))
+}
+
 const toTimelineItems = (
   index: TraceIndex,
   execution: NodeExecutionRef,
   limit?: number,
 ): ScopeTimeline[] => {
-  const pipelineScope = index.scopeById.get(execution.pipelineScopeId)
-  if (!pipelineScope) return []
-
-  const eventsResult = getScopeEvents(index, execution.pipelineScopeId)
+  const eventsResult = collectScopeEventEntries(index, execution.pipelineScopeId)
   if (!eventsResult.ok) return []
 
-  const items = eventsResult.value.map((event) => {
-    const matchedScope = findInnermostScopeAtSeq(pipelineScope, event.seq)
-    const identity = readScopeIdentityFields(matchedScope.payload)
+  const items = eventsResult.value.map(({ event, scope }) => {
+    const identity = readScopeIdentityFields(scope.payload)
     return {
-      scopeId: matchedScope.id,
+      scopeId: scope.id,
       occurrenceIndex: execution.occurrenceIndex,
       ts: event.ts,
       seq: event.seq,
       event: event.rawMessage,
-      scopeKind: matchedScope.kind,
-      taskId: matchedScope.taskId ?? identity.taskId,
+      scopeKind: scope.kind,
+      taskId: scope.taskId ?? identity.taskId,
       nodeId: identity.nodeId,
-      name: readScopeName(matchedScope),
+      name: readScopeName(scope),
       sourceKey: event.source.sourceKey,
       line: event.source.line,
     }
@@ -270,17 +285,10 @@ export const getScopeEvents = (
   index: TraceIndex,
   scopeId: string,
 ): QueryResult<ProtocolEvent[]> => {
-  const scope = index.scopeById.get(scopeId)
-  if (!scope) {
-    return fail('not_found', `scope not found: ${scopeId}`)
-  }
-
-  const endSeq = scope.endSeq ?? scope.seq
-  const events = [...index.eventBySeq.values()]
-    .filter((event) => event.seq >= scope.seq && event.seq <= endSeq)
-    .sort((left, right) => left.seq - right.seq)
-
-  return ok(events)
+  const entries = collectScopeEventEntries(index, scopeId)
+  return entries.ok
+    ? ok(entries.value.map(({ event }) => event))
+    : entries
 }
 
 export const getNodeTimeline = (
