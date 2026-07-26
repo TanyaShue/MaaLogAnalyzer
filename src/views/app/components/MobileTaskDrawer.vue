@@ -2,8 +2,9 @@
 import { NDrawer, NDrawerContent, NScrollbar, NList, NListItem, NFlex, NText, NTag } from 'naive-ui'
 import type { TaskInfo } from '../../../types'
 import { formatDuration } from '../../../utils/formatDuration'
+import { buildTaskIdentity, isSameTask } from '@windsland52/maa-log-tools/task-identity'
 
-defineProps<{
+const props = defineProps<{
   show: boolean
   tasks: TaskInfo[]
   selectedTask: TaskInfo | null
@@ -21,6 +22,10 @@ const handleUpdateShow = (value: boolean) => {
 const handleSelectTask = (task: TaskInfo) => {
   emit('select-task', task)
 }
+
+const isSelectedTask = (task: TaskInfo) => {
+  return props.selectedTask != null && isSameTask(props.selectedTask, task)
+}
 </script>
 
 <template>
@@ -35,10 +40,10 @@ const handleSelectTask = (task: TaskInfo) => {
         <n-list hoverable clickable>
           <n-list-item
             v-for="(task, index) in tasks"
-            :key="task.task_id"
+            :key="buildTaskIdentity(task)"
             @click="handleSelectTask(task)"
             :style="{
-              backgroundColor: selectedTask?.task_id === task.task_id ? 'var(--n-color-target)' : 'transparent',
+              backgroundColor: isSelectedTask(task) ? 'var(--n-color-target)' : 'transparent',
               cursor: 'pointer',
               padding: '12px 16px',
             }"

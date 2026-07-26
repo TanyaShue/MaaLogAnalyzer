@@ -1,4 +1,5 @@
 import type { TaskInfo, NodeInfo, UnifiedFlowItem } from '../../../../types'
+import { buildTaskIdentity } from '@windsland52/maa-log-tools/task-identity'
 
 const getLastFlowPathSignature = (items: NodeInfo['node_flow']) => {
   if (!items || items.length === 0) return '0'
@@ -17,12 +18,13 @@ const getLastFlowPathSignature = (items: NodeInfo['node_flow']) => {
 
 export const buildFollowTasksFingerprint = (tasks: TaskInfo[]) => {
   return tasks.map((task) => {
+    const taskIdentity = buildTaskIdentity(task)
     const latestNode = task.nodes[task.nodes.length - 1]
     if (!latestNode) {
-      return `${task.task_id}:${task.status}:${task.end_time ?? ''}:N0`
+      return `${taskIdentity}:${task.status}:${task.end_time ?? ''}:N0`
     }
     return [
-      task.task_id,
+      taskIdentity,
       task.status,
       task.end_time ?? '',
       `N${task.nodes.length}`,

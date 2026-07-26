@@ -1,6 +1,7 @@
 import { nextTick, type Ref } from 'vue'
 import type { TaskInfo } from '../../../../types'
 import type { ScrollablePanelRef } from './types'
+import { isSameTask } from '@windsland52/maa-log-tools/task-identity'
 
 interface CreateFollowSchedulerOptions {
   tasks: Ref<TaskInfo[]>
@@ -23,7 +24,8 @@ export const createFollowScheduler = (options: CreateFollowSchedulerOptions) => 
     const latestTask = options.tasks.value[latestIndex]
     if (!latestTask) return
 
-    const needSwitchTask = options.selectedTask.value?.task_id !== latestTask.task_id
+    const selectedTask = options.selectedTask.value
+    const needSwitchTask = !selectedTask || !isSameTask(selectedTask, latestTask)
     if (needSwitchTask) {
       options.activeTaskIndex.value = latestIndex
       options.onSelectTask(latestTask)
