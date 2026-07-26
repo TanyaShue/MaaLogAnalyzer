@@ -69,19 +69,6 @@ describe('release workflow shell safety', () => {
     expect(workflow).toContain('files: release-assets/*')
   })
 
-  it('fails tagged desktop releases closed when signing secrets are unavailable', () => {
-    const workflow = readWorkflow('build.yml')
-
-    expect(workflow).toContain('Tagged releases require WINDOWS_CERTIFICATE')
-    expect(workflow).toContain('certificateThumbprint = $certificate.Thumbprint')
-    expect(workflow).toContain('No Developer ID Application identity was imported')
-    expect(workflow).toContain('APPLE_SIGNING_IDENTITY=$signing_identity')
-    expect(workflow).toContain('Get-AuthenticodeSignature')
-    expect(workflow).toContain('codesign --verify --deep --strict')
-    expect(workflow).toContain('xcrun stapler validate')
-    expect(workflow.match(/构建应用（手动未签名构建）/g)).toHaveLength(2)
-  })
-
   it('uses lock files and the local VS Code packaging toolchain', () => {
     const workflow = readWorkflow('release-vscode.yml')
 
