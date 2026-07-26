@@ -1,6 +1,5 @@
 import { ref, watch, type Ref } from 'vue'
-
-const PROCESS_LAYOUT_STORAGE_KEY = 'maa-log-analyzer-process-layout'
+import { layoutResetGeneration, PROCESS_LAYOUT_STORAGE_KEY } from '../../../utils/layoutPersistence'
 
 interface ProcessLayoutState {
   taskListCollapsed?: boolean
@@ -115,6 +114,16 @@ export const useProcessLayout = (options: {
       nodeNavSize: clampLayoutSize(navSize, 0, 0.4, 0.2),
       nodeNavSavedSize: clampLayoutSize(navSaved, 0.05, 0.4, 0.2),
     })
+  })
+
+  watch(layoutResetGeneration, () => {
+    const navSize = getNodeNavDefaultSize(false, false, options.displayMode.value)
+    taskListCollapsed.value = false
+    taskListSize.value = 0.25
+    taskListSavedSize.value = 0.25
+    nodeNavCollapsed.value = false
+    nodeNavSize.value = navSize
+    nodeNavSavedSize.value = navSize
   })
 
   return {

@@ -1,6 +1,7 @@
 import { reactive, watch, type Ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getSettings, saveSettings, getDefaultSettings } from '../../../utils/settings'
+import { resetPersistedLayouts } from '../../../utils/layoutPersistence'
 
 export const useSettingsState = (show?: Ref<boolean>) => {
   const message = useMessage()
@@ -41,6 +42,7 @@ export const useSettingsState = (show?: Ref<boolean>) => {
   const handleReset = () => {
     Object.assign(settings, getDefaultSettings())
     saveSettings(settings)
+    resetPersistedLayouts()
     message.success('已恢复默认设置')
   }
 

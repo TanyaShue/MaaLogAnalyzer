@@ -8,10 +8,9 @@ import {
 } from '@vicons/antd'
 import { resolveEmbedProfile } from '../../../embed/profiles'
 import { EMBED_MODE_VSCODE_LAUNCH, parseEmbedMode } from '../../../utils/embedMode'
+import { APP_LAYOUT_STORAGE_KEY, layoutResetGeneration } from '../../../utils/layoutPersistence'
 
 type ViewMode = 'analysis' | 'search' | 'statistics' | 'flowchart' | 'split'
-
-const APP_LAYOUT_STORAGE_KEY = 'maa-log-analyzer-app-layout'
 
 interface AppLayoutState {
   analysisSplitSize?: number
@@ -140,6 +139,13 @@ export const useAppViewState = () => {
     }
 
     saveAppLayoutState(next)
+  })
+
+  watch(layoutResetGeneration, () => {
+    splitSize.value = 0.65
+    splitVerticalSize.value = 0.5
+    detailViewCollapsed.value = false
+    detailViewSavedSize.value = 0.6
   })
 
   return {

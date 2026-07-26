@@ -1,4 +1,5 @@
 import { ref, watch } from 'vue'
+import { layoutResetGeneration } from '../../../utils/layoutPersistence'
 
 const clampSplitSize = (value: unknown, min: number, max: number, fallback: number) => {
   if (typeof value !== 'number' || Number.isNaN(value)) return fallback
@@ -31,6 +32,10 @@ export const useTextSearchLayout = (storageKey: string) => {
     } catch {
       // ignore write errors
     }
+  })
+
+  watch(layoutResetGeneration, () => {
+    textSearchSplitSize.value = fallback
   })
 
   return {

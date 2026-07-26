@@ -1,14 +1,13 @@
 import { ref } from 'vue'
 import { useIsMobile } from '../../../../composables/useIsMobile'
 import { useTextSearchLayout } from '../useTextSearchLayout'
+import { TEXT_SEARCH_LAYOUT_STORAGE_KEY } from '../../../../utils/layoutPersistence'
 import { useLoadedTargetSource } from '../useLoadedTargetSource'
 import { useTextSearchHistory } from '../useTextSearchHistory'
 import { useTextSearchFilters } from '../useTextSearchFilters'
 import { useTextSearchState } from '../useTextSearchState'
 import { buildLoadedTargetSourceOptions } from './contextOptions'
 import type { UseTextSearchViewModelOptions } from './types'
-
-const TEXT_SEARCH_LAYOUT_STORAGE_KEY = 'maa-log-analyzer-text-search-layout'
 
 export const useTextSearchViewContext = (options: UseTextSearchViewModelOptions) => {
   const { isMobile } = useIsMobile()
