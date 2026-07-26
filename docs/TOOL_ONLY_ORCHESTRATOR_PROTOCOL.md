@@ -145,6 +145,8 @@ interface ParseLogBundleResult {
 interface GetTaskOverviewArgs {
   session_id: string
   task_id?: number
+  scope_id?: string
+  occurrence_index?: number
 }
 ```
 
@@ -157,6 +159,8 @@ interface GetTaskOverviewResult {
     entry: string
     status: 'success' | 'failed' | 'running'
     duration_ms: number
+    scope_id: string
+    occurrence_index: number
   } | null
   summary: {
     node_count: number
@@ -166,6 +170,9 @@ interface GetTaskOverviewResult {
   evidences: Evidence[]
 }
 ```
+
+当同一 `task_id` 存在多次执行时，调用方必须提供 `scope_id` 或从 1 开始的
+`occurrence_index`；否则返回 `AMBIGUOUS_SCOPE_SELECTOR`，不会跨执行拼接状态和耗时。
 
 ---
 

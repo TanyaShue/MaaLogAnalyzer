@@ -46,6 +46,8 @@ export interface ParseLogBundleResult {
 export interface GetTaskOverviewArgs {
   session_id: string
   task_id?: number
+  scope_id?: string
+  occurrence_index?: number
 }
 
 export interface GetTaskOverviewResult {
@@ -54,6 +56,8 @@ export interface GetTaskOverviewResult {
     entry: string
     status: 'success' | 'failed' | 'running'
     duration_ms: number
+    scope_id: string
+    occurrence_index: number
   } | null
   summary: {
     node_count: number

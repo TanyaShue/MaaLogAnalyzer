@@ -184,6 +184,78 @@ const findTaskScopes = (
   return session.artifacts.index.taskScopesByTaskId.get(taskId) ?? []
 }
 
+const collectScopesWithinTaskExecution = (
+  taskScope: ScopeNode,
+  predicate: (scope: ScopeNode) => boolean,
+): ScopeNode[] => {
+  const result: ScopeNode[] = []
+  const visit = (scope: ScopeNode) => {
+    for (const child of scope.children) {
+      if (child.kind === 'task') continue
+      if (predicate(child)) result.push(child)
+      visit(child)
+    }
+  }
+  visit(taskScope)
+  return result.sort((left, right) => left.seq - right.seq)
+}
+
+const resolveTaskExecution = (
+  taskScopes: ScopeNode[],
+  args: Pick<GetTaskOverviewArgs, 'task_id' | 'scope_id' | 'occurrence_index'>,
+): {
+  scope?: ScopeNode
+  occurrenceIndex?: number
+  errorCode?: AnalyzerToolErrorCode
+  errorMessage?: string
+} => {
+  const ordered = [...taskScopes].sort((left, right) => left.seq - right.seq)
+  if (args.occurrence_index != null && (
+    !Number.isSafeInteger(args.occurrence_index) || args.occurrence_index <= 0
+  )) {
+    return {
+      errorCode: 'INVALID_REQUEST',
+      errorMessage: 'occurrence_index must be a positive safe integer',
+    }
+  }
+
+  if (args.scope_id) {
+    const index = ordered.findIndex(scope => scope.id === args.scope_id)
+    if (index < 0) {
+      return {
+        errorCode: 'SCOPE_NOT_FOUND',
+        errorMessage: `scope_id=${args.scope_id} not found for task_id=${args.task_id}`,
+      }
+    }
+    if (args.occurrence_index != null && args.occurrence_index !== index + 1) {
+      return {
+        errorCode: 'SCOPE_NOT_FOUND',
+        errorMessage: `scope_id=${args.scope_id} does not match occurrence_index=${args.occurrence_index}`,
+      }
+    }
+    return { scope: ordered[index], occurrenceIndex: index + 1 }
+  }
+
+  if (args.occurrence_index != null) {
+    const scope = ordered[args.occurrence_index - 1]
+    if (!scope) {
+      return {
+        errorCode: 'SCOPE_NOT_FOUND',
+        errorMessage: `occurrence_index=${args.occurrence_index} not found for task_id=${args.task_id}`,
+      }
+    }
+    return { scope, occurrenceIndex: args.occurrence_index }
+  }
+
+  if (ordered.length > 1) {
+    return {
+      errorCode: 'AMBIGUOUS_SCOPE_SELECTOR',
+      errorMessage: `task_id=${args.task_id} has ${ordered.length} executions; provide scope_id or occurrence_index`,
+    }
+  }
+  return { scope: ordered[0], occurrenceIndex: ordered.length === 1 ? 1 : undefined }
+}
+
 const collectPipelineNodeScopesForTask = (
   session: AnalyzerSession,
   taskId?: number,
@@ -214,6 +286,16 @@ const countRecoFailures = (
     }
   }
   return count
+}
+
+const countRecoFailuresWithinTaskExecution = (taskScope: ScopeNode): number => {
+  return collectScopesWithinTaskExecution(
+    taskScope,
+    scope => (
+      (scope.kind === 'recognition' || scope.kind === 'recognition_node')
+      && scope.status === 'failed'
+    ),
+  ).length
 }
 
 const validateLimit = (
@@ -381,8 +463,9 @@ const buildNodeImageEvidences = (
   taskId: number,
   nodeId: number,
   occurrenceIndex?: number,
+  projectedTask?: TaskInfo,
 ): ReturnType<typeof buildEvidence>[] => {
-  const task = findTaskById(session, taskId)
+  const task = projectedTask ?? findTaskById(session, taskId)
   if (!task) return []
 
   const node = findTaskNodeOccurrence(task, nodeId, occurrenceIndex)
@@ -430,8 +513,13 @@ const buildNodeImageEvidences = (
 const buildTaskImageEvidences = (
   session: AnalyzerSession,
   taskId: number,
+  taskStartSeq?: number,
 ): ReturnType<typeof buildEvidence>[] => {
-  const task = findTaskById(session, taskId)
+  const task = taskStartSeq == null
+    ? findTaskById(session, taskId)
+    : session.tasks.find(candidate => (
+      candidate.task_id === taskId && candidate._startEventIndex === taskStartSeq
+    ))
   if (!task) return []
 
   const evidences: ReturnType<typeof buildEvidence>[] = []
@@ -443,6 +531,7 @@ const buildTaskImageEvidences = (
       taskId,
       node.node_id,
       task.nodes.filter((item) => item.node_id === node.node_id && item.ts <= node.ts).length,
+      task,
     )
     for (const evidence of nodeEvidences) {
       if (seen.has(evidence.evidence_id)) continue
@@ -729,27 +818,41 @@ export const createAnalyzerToolHandlers = (
           return fail('TASK_NOT_FOUND', `task_id=${args.task_id} not found`, warnings, startedAt)
         }
 
-        const pipelineScopes = collectPipelineNodeScopesForTask(session, args.task_id)
-        const firstScope = taskScopes[0]
-        const lastScope = taskScopes[taskScopes.length - 1]
-        const firstPayload = firstScope.payload as Record<string, unknown>
-        const entry = typeof firstPayload.entry === 'string' ? firstPayload.entry : ''
+        const resolution = resolveTaskExecution(taskScopes, args)
+        if (resolution.errorCode || !resolution.scope || resolution.occurrenceIndex == null) {
+          return fail(
+            resolution.errorCode ?? 'TASK_NOT_FOUND',
+            resolution.errorMessage ?? `task_id=${args.task_id} not found`,
+            warnings,
+            startedAt,
+          )
+        }
+
+        const taskScope = resolution.scope
+        const pipelineScopes = collectScopesWithinTaskExecution(
+          taskScope,
+          scope => scope.kind === 'pipeline_node',
+        )
+        const payload = taskScope.payload as Record<string, unknown>
+        const entry = typeof payload.entry === 'string' ? payload.entry : ''
 
         return ok({
           task: {
             task_id: args.task_id,
             entry,
-            status: toToolStatus(lastScope.status),
-            duration_ms: toDurationMs(firstScope.ts, lastScope.endTs ?? lastScope.ts),
+            status: toToolStatus(taskScope.status),
+            duration_ms: toDurationMs(taskScope.ts, taskScope.endTs ?? taskScope.ts),
+            scope_id: taskScope.id,
+            occurrence_index: resolution.occurrenceIndex,
           },
           summary: {
             node_count: pipelineScopes.length,
             failed_node_count: pipelineScopes.filter((scope) => scope.status === 'failed').length,
-            reco_failed_count: countRecoFailures(session, args.task_id),
+            reco_failed_count: countRecoFailuresWithinTaskExecution(taskScope),
           },
           evidences: [
-            ...buildTaskEvidences(session, taskScopes),
-            ...buildTaskImageEvidences(session, args.task_id),
+            ...buildTaskEvidences(session, [taskScope]),
+            ...buildTaskImageEvidences(session, args.task_id, taskScope.seq),
           ],
         }, warnings, startedAt)
       }

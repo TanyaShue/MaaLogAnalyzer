@@ -213,6 +213,58 @@ describe('Analyzer tool handlers', () => {
     }
   })
 
+  it('requires an execution selector when a task id is reused', async () => {
+    const repeatedTaskContent = [
+      makeEventLine(1, 'Tasker.Task.Starting', { task_id: 7, entry: 'First', hash: 'h1', uuid: 'u1' }),
+      makeEventLine(2, 'Node.PipelineNode.Starting', { task_id: 7, node_id: 701, name: 'FirstNode' }),
+      makeEventLine(3, 'Node.PipelineNode.Failed', { task_id: 7, node_id: 701, name: 'FirstNode' }),
+      makeEventLine(4, 'Tasker.Task.Failed', { task_id: 7, entry: 'First', hash: 'h1', uuid: 'u1' }),
+      makeEventLine(5, 'Tasker.Task.Starting', { task_id: 7, entry: 'Retry', hash: 'h2', uuid: 'u2' }),
+      makeEventLine(6, 'Node.PipelineNode.Starting', { task_id: 7, node_id: 702, name: 'RetryNode' }),
+      makeEventLine(7, 'Node.PipelineNode.Succeeded', { task_id: 7, node_id: 702, name: 'RetryNode' }),
+      makeEventLine(8, 'Tasker.Task.Succeeded', { task_id: 7, entry: 'Retry', hash: 'h2', uuid: 'u2' }),
+    ].join('\n')
+    const handlers = createAnalyzerToolHandlers({
+      async resolve_input() {
+        return { content: repeatedTaskContent, source_key: 'repeated.log' }
+      },
+    })
+    await handlers.parse_log_bundle({
+      session_id: 's-repeated-task',
+      inputs: [{ path: '/logs/repeated.log', kind: 'file' }],
+    })
+
+    const ambiguous = await handlers.get_task_overview({
+      session_id: 's-repeated-task',
+      task_id: 7,
+    })
+    expect(ambiguous.ok).toBe(false)
+    if (!ambiguous.ok) {
+      expect(ambiguous.error.code).toBe('AMBIGUOUS_SCOPE_SELECTOR')
+    }
+
+    const retry = await handlers.get_task_overview({
+      session_id: 's-repeated-task',
+      task_id: 7,
+      occurrence_index: 2,
+    })
+    expect(retry.ok).toBe(true)
+    if (retry.ok) {
+      expect(retry.data.task).toMatchObject({
+        task_id: 7,
+        entry: 'Retry',
+        status: 'success',
+        duration_ms: 3,
+        occurrence_index: 2,
+      })
+      expect(retry.data.summary).toEqual({
+        node_count: 1,
+        failed_node_count: 0,
+        reco_failed_count: 0,
+      })
+    }
+  })
+
   it('keeps every resolved source when metadata is omitted', async () => {
     const handlers = createAnalyzerToolHandlers({
       async resolve_input() {
