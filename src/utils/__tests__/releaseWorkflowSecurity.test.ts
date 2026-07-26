@@ -56,4 +56,10 @@ describe('release workflow shell safety', () => {
       'main',
     ].every(tag => !pattern.test(tag))).toBe(true)
   })
+
+  it('creates desktop releases only for version tags', () => {
+    expect(readWorkflow('build.yml')).toMatch(
+      /\n  release:\r?\n    if: startsWith\(github\.ref, 'refs\/tags\/v'\)/,
+    )
+  })
 })
