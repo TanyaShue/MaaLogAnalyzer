@@ -76,3 +76,30 @@ describe('EventLine', () => {
     ])
   })
 })
+
+describe('realtime dedup retention', () => {
+  const getDedupSize = (parser: LogParser): number => {
+    return (parser as unknown as {
+      lastEventBySignature: Map<string, unknown>
+    }).lastEventBySignature.size
+  }
+
+  it('does not retain signatures that have no finite timestamp', () => {
+    const parser = new LogParser()
+    parser.appendRealtimeLines(Array.from({ length: 100 }, (_, index) => (
+      `[not-a-timestamp][INF][Px1][Tx1][test] !!!OnEventNotify!!! [handle=1] [msg=Tasker.Task.Starting] [details={"task_id":${index + 1},"entry":"Task"}]`
+    )))
+
+    expect(parser.getEventsSnapshot()).toHaveLength(100)
+    expect(getDedupSize(parser)).toBe(0)
+  })
+
+  it('bounds signatures even when timestamps do not advance', () => {
+    const parser = new LogParser()
+    parser.appendRealtimeLines(Array.from({ length: 16_500 }, (_, index) => (
+      `[2026-07-26 12:00:00.000][INF][Px1][Tx1][test] !!!OnEventNotify!!! [handle=1] [msg=Tasker.Task.Starting] [details={"task_id":${index + 1},"entry":"Task"}]`
+    )))
+
+    expect(getDedupSize(parser)).toBeLessThanOrEqual(16_384)
+  })
+})

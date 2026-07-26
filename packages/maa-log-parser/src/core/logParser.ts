@@ -129,6 +129,7 @@ const forceCopyString = (value: string): string => {
 // wide enough so delayed mirrored terminal events do not create synthetic
 // empty scopes after the real scope has already been closed.
 const CROSS_SOURCE_DUPLICATE_WINDOW_MS = 1000
+const MAX_DEDUP_SIGNATURES = 16_384
 
 export class LogParser {
   private events: EventNotification[] = []
@@ -215,6 +216,22 @@ export class LogParser {
     }
   }
 
+  private pruneDedupSignatureCapacity(): void {
+    while (
+      this.dedupSignatureTimeline.length - this.dedupSignatureTimelineHead
+      > MAX_DEDUP_SIGNATURES
+    ) {
+      const item = this.dedupSignatureTimeline[this.dedupSignatureTimelineHead]
+      if (item) {
+        const mapped = this.lastEventBySignature.get(item.signature)
+        if (mapped?.timestampMs === item.timestampMs) {
+          this.lastEventBySignature.delete(item.signature)
+        }
+      }
+      this.dedupSignatureTimelineHead += 1
+    }
+  }
+
   private internEventToken(raw: string): string {
     const copied = forceCopyString(raw)
     const pooled = this.eventTokenPool.get(copied)
@@ -287,16 +304,17 @@ export class LogParser {
         }
       }
     }
-    this.lastEventBySignature.set(event._dedupSignature, {
-      timestampMs: eventMs,
-      processId: event.processId,
-      threadId: event.threadId,
-    })
     if (Number.isFinite(eventMs)) {
+      this.lastEventBySignature.set(event._dedupSignature, {
+        timestampMs: eventMs,
+        processId: event.processId,
+        threadId: event.threadId,
+      })
       this.dedupSignatureTimeline.push({
         signature: event._dedupSignature,
         timestampMs: eventMs,
       })
+      this.pruneDedupSignatureCapacity()
     }
   }
 
