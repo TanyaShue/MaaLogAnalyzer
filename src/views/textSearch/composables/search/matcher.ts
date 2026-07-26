@@ -8,7 +8,7 @@ interface MatchRange {
 export const compileSearchPattern = (keyword: string, useRegex: boolean, caseSensitive: boolean) => {
   if (!useRegex) return null
   try {
-    return new RegExp(keyword, caseSensitive ? 'g' : 'gi')
+    return new RegExp(keyword, caseSensitive ? '' : 'i')
   } catch {
     return null
   }
