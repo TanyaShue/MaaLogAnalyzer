@@ -62,6 +62,29 @@ describe('LogParser multi-source parsing', () => {
     expect(artifacts.rawLines?.sources.get('a.log')?.lines).toHaveLength(3)
     expect(artifacts.rawLines?.sources.get('b.log')?.lines[1]).toContain('Node.PipelineNode.Succeeded')
   })
+
+  it('assigns deterministic unique keys when source keys collide', async () => {
+    const parser = new LogParser()
+
+    await parser.parseInputs([
+      { content: sourceAContent, sourceKey: 'duplicate.log' },
+      { content: sourceBContent, sourceKey: 'duplicate.log' },
+      { content: '', sourceKey: 'duplicate.log#2' },
+      { content: '', sourceKey: '', sourcePath: 'fallback.log' },
+    ], undefined, {
+      storeRawLines: true,
+    })
+
+    const artifacts = parser.getParseArtifactsSnapshot()
+    expect(artifacts.events[0]?.source.sourceKey).toBe('duplicate.log')
+    expect(artifacts.events[5]?.source.sourceKey).toBe('duplicate.log#3')
+    expect([...artifacts.rawLines!.sources.keys()]).toEqual([
+      'duplicate.log',
+      'duplicate.log#3',
+      'duplicate.log#2',
+      'fallback.log',
+    ])
+  })
 })
 
 describe('Analyzer tool handlers', () => {
@@ -187,6 +210,44 @@ describe('Analyzer tool handlers', () => {
         source_key: 'b.log',
         line: 3,
       })
+    }
+  })
+
+  it('keeps every resolved source when metadata is omitted', async () => {
+    const handlers = createAnalyzerToolHandlers({
+      async resolve_input() {
+        return [
+          { content: sourceAContent },
+          { content: sourceBContent },
+        ]
+      },
+    })
+
+    const parsed = await handlers.parse_log_bundle({
+      session_id: 's-duplicate-source',
+      inputs: [{ path: '/logs/debug', kind: 'folder' }],
+    })
+    expect(parsed.ok).toBe(true)
+
+    const session = handlers.store.get('s-duplicate-source')
+    expect(session?.artifacts.events[0]?.source.sourceKey).toBe('/logs/debug')
+    expect(session?.artifacts.events[5]?.source.sourceKey).toBe('/logs/debug#2')
+    expect([...session!.artifacts.rawLines!.sources.keys()]).toEqual([
+      '/logs/debug',
+      '/logs/debug#2',
+    ])
+
+    const rawLines = await handlers.get_raw_lines({
+      session_id: 's-duplicate-source',
+      task_id: 1,
+    })
+    expect(rawLines.ok).toBe(true)
+    if (rawLines.ok) {
+      expect(rawLines.data.lines).toHaveLength(6)
+      expect(new Set(rawLines.data.lines.map(line => line.source_key))).toEqual(new Set([
+        '/logs/debug',
+        '/logs/debug#2',
+      ]))
     }
   })
 

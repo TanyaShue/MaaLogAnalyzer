@@ -61,6 +61,43 @@ export interface ParseArtifactsSnapshot {
   rawLines?: RawLineStore
 }
 
+const normalizeParseSourceInputs = (inputs: ParseSourceInput[]): ParseSourceInput[] => {
+  const indexedInputs = inputs.map((input, index) => ({
+    ...input,
+    inputIndex: input.inputIndex ?? index,
+  }))
+  const baseKeys = indexedInputs.map((input) => {
+    if (input.sourceKey?.trim()) return input.sourceKey
+    if (input.sourcePath?.trim()) return input.sourcePath
+    return `input:${input.inputIndex}`
+  })
+  const reservedKeys = new Set(baseKeys)
+  const usedKeys = new Set<string>()
+  const nextSuffixByBaseKey = new Map<string, number>()
+
+  return indexedInputs.map((input, index) => {
+    const baseKey = baseKeys[index]!
+    let sourceKey = baseKey
+
+    if (usedKeys.has(sourceKey)) {
+      let suffix = nextSuffixByBaseKey.get(baseKey) ?? 2
+      do {
+        sourceKey = `${baseKey}#${suffix}`
+        suffix += 1
+      } while (usedKeys.has(sourceKey) || reservedKeys.has(sourceKey))
+      nextSuffixByBaseKey.set(baseKey, suffix)
+    } else {
+      nextSuffixByBaseKey.set(baseKey, 2)
+    }
+
+    usedKeys.add(sourceKey)
+    return {
+      ...input,
+      sourceKey,
+    }
+  })
+}
+
 const defaultParseYieldControl = async (): Promise<void> => {
   // 使用 MessageChannel 可以实现比 setTimeout(0) 更快、更高效的宏任务 yield，
   // 将切片时间从平均 ~4ms 降低至 <1ms，从而成倍提升大型日志解析性能
@@ -389,10 +426,7 @@ export class LogParser {
 
     this.resetParsedEvents()
 
-    const normalizedInputs = inputs.map((input, index) => ({
-      ...input,
-      inputIndex: input.inputIndex ?? index,
-    }))
+    const normalizedInputs = normalizeParseSourceInputs(inputs)
     const totalChars = normalizedInputs.reduce((sum, input) => sum + input.content.length, 0)
     const yieldControl = options?.yieldControl === undefined
       ? defaultParseYieldControl
