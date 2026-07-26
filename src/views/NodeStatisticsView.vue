@@ -107,7 +107,6 @@ const hasSummaryContent = computed(() => (
 const hasChartContent = computed(() => activeChartOption.value !== null)
 
 const layoutHostRef = ref<HTMLElement | null>(null)
-const statisticsBodyScrollRef = ref<HTMLElement | null>(null)
 const layoutHostWidth = ref(0)
 let layoutResizeObserver: ResizeObserver | null = null
 
@@ -202,7 +201,7 @@ onBeforeUnmount(() => {
     </template>
 
     <div ref="layoutHostRef" class="statistics-layout-host">
-      <div ref="statisticsBodyScrollRef" class="statistics-body-scroll">
+      <div class="statistics-body-scroll">
       <div class="statistics-body-content">
         <node-statistics-summary-section
           v-if="hasSummaryContent"
