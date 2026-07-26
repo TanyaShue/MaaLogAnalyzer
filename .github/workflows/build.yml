@@ -42,7 +42,7 @@ jobs:
           pnpm run version -- $ver
 
       - name: 安装依赖
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: 构建应用
         run: pnpm tauri build
@@ -102,7 +102,7 @@ jobs:
           pnpm run version -- "${ver}"
 
       - name: 安装依赖
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: 构建应用
         run: pnpm tauri build
@@ -160,7 +160,7 @@ jobs:
           sudo apt-get install -y fuse libfuse2 wget file
 
       - name: 安装依赖
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: 构建应用
         run: pnpm tauri build

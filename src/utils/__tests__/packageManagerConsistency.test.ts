@@ -37,4 +37,18 @@ describe('package manager consistency', () => {
     expect(Object.values(rootPackage.scripts ?? {}).join('\n'))
       .not.toMatch(/(?:^|&&\s*)pnpm\s/)
   })
+
+  it('uses frozen pnpm installs in CI', () => {
+    const root = resolve(import.meta.dirname, '../../..')
+    const files = readdirSync(resolve(root, '.github'), { recursive: true, encoding: 'utf8' })
+      .filter(file => file.endsWith('.yml') || file.endsWith('.yaml'))
+
+    const installCommands = files.flatMap((file) => {
+      const content = readFileSync(resolve(root, '.github', file), 'utf8')
+      return [...content.matchAll(/\bpnpm install[^\r\n]*/g)].map(match => match[0])
+    })
+
+    expect(installCommands.length).toBeGreaterThan(0)
+    expect(installCommands.filter(command => !command.includes('--frozen-lockfile'))).toEqual([])
+  })
 })
