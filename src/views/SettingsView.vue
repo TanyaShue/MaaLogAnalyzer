@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import { toRef } from 'vue'
 import { NCard, NButton, NFlex } from 'naive-ui'
 import { useSettingsState } from './settings/composables/useSettingsState'
 import LogAnalysisSettingsCard from './settings/components/LogAnalysisSettingsCard.vue'
 import FlowchartSettingsCard from './settings/components/FlowchartSettingsCard.vue'
+
+const props = defineProps<{
+  show?: boolean
+}>()
 
 const {
   settings,
@@ -10,7 +15,7 @@ const {
   focusZoomOptions,
   handleSave,
   handleReset,
-} = useSettingsState()
+} = useSettingsState(toRef(props, 'show'))
 </script>
 
 <template>

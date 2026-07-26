@@ -1,9 +1,21 @@
+import { reactive, watch, type Ref } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getSettings, saveSettings, getDefaultSettings } from '../../../utils/settings'
 
-export const useSettingsState = () => {
+export const useSettingsState = (show?: Ref<boolean>) => {
   const message = useMessage()
-  const settings = getSettings()
+  const persistedSettings = getSettings()
+  const settings = reactive({ ...persistedSettings })
+
+  const reloadDraft = () => {
+    Object.assign(settings, persistedSettings)
+  }
+
+  if (show) {
+    watch(show, (visible) => {
+      if (visible) reloadDraft()
+    }, { flush: 'sync' })
+  }
 
   const playbackSpeedOptions = [
     { label: '慢速 1500ms', value: 1500 },
@@ -22,6 +34,7 @@ export const useSettingsState = () => {
 
   const handleSave = () => {
     saveSettings(settings)
+    reloadDraft()
     message.success('设置已保存')
   }
 

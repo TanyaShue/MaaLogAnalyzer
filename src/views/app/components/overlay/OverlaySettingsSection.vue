@@ -27,6 +27,6 @@ const handleShowUpdate = (value: boolean) => {
     :style="{ width }"
     :bordered="false"
   >
-    <settings-view />
+    <settings-view :show="show" />
   </n-modal>
 </template>
