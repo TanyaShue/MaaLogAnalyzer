@@ -25,6 +25,7 @@ export const useBridgeRuntime = (options: UseBridgeRuntimeOptions) => {
   const {
     getBridge,
     realtimeSession,
+    realtimeStreaming,
     stopRealtimeSession,
     cleanupRealtimeSession,
     isRealtimeContext,
@@ -123,6 +124,7 @@ export const useBridgeRuntime = (options: UseBridgeRuntimeOptions) => {
   return {
     stopRealtimeSession,
     cleanupRealtimeSession,
+    realtimeStreaming,
     isRealtimeContext,
     bridgeRecognitionImages,
     bridgeRecognitionImageRefs,

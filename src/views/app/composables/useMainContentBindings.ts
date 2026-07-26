@@ -18,7 +18,7 @@ interface UseMainContentBindingsOptions {
   bridgeRevealTask: ((task: string) => Promise<void>) | null
   pendingScrollNodeId: Ref<number | null>
   followLast: Ref<boolean>
-  isRealtimeContext: ComputedRef<boolean>
+  realtimeStreaming: Ref<boolean>
   showRealtimeStatus: boolean
   showReloadControls: boolean
   detailViewCollapsed: Ref<boolean>
@@ -76,7 +76,7 @@ export const useMainContentBindings = (options: UseMainContentBindingsOptions) =
     bridgeRevealTask: options.bridgeRevealTask,
     pendingScrollNodeId: options.pendingScrollNodeId.value,
     followLast: options.followLast.value,
-    isRealtimeStreaming: options.isRealtimeContext.value,
+    isRealtimeStreaming: options.realtimeStreaming.value,
     showRealtimeStatus: options.showRealtimeStatus,
     showReloadControls: options.showReloadControls,
   }))

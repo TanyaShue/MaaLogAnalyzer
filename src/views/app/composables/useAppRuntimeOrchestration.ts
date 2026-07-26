@@ -55,6 +55,7 @@ export const useAppRuntimeOrchestration = (options: UseAppRuntimeOrchestrationOp
   const {
     stopRealtimeSession,
     cleanupRealtimeSession,
+    realtimeStreaming,
     isRealtimeContext,
     bridgeRecognitionImages,
     bridgeRecognitionImageRefs,
@@ -87,6 +88,7 @@ export const useAppRuntimeOrchestration = (options: UseAppRuntimeOrchestrationOp
 
   return {
     stopRealtimeSession,
+    realtimeStreaming,
     isRealtimeContext,
     bridgeRecognitionImages,
     bridgeRecognitionImageRefs,
