@@ -23,9 +23,12 @@ export const useFlowchartPopover = (options: UseFlowchartPopoverOptions) => {
   const updatePopoverPosition = () => {
     if (!popoverNodeId.value) return
 
-    const nodeEl = document.querySelector(`[data-id="${popoverNodeId.value}"]`)
     const canvasEl = document.querySelector('.flowchart-canvas')
-    if (!nodeEl || !canvasEl) return
+    if (!canvasEl) return
+
+    const nodeEl = Array.from(canvasEl.querySelectorAll('[data-id]'))
+      .find(element => element.getAttribute('data-id') === popoverNodeId.value)
+    if (!nodeEl) return
 
     const nodeRect = nodeEl.getBoundingClientRect()
     const canvasRect = canvasEl.getBoundingClientRect()
