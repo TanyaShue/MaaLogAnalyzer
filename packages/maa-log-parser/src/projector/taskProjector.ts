@@ -38,9 +38,16 @@ export interface ProjectedTaskCacheEntry {
   task: TaskInfo
 }
 
+export interface SequencedTaskEvent {
+  seq: number
+  sourceKey?: string
+  event: EventNotification
+}
+
 export interface ProjectTasksFromTraceOptions {
   events?: EventNotification[]
   eventsByTaskId?: ReadonlyMap<number, EventNotification[]>
+  sequencedEventsByTaskId?: ReadonlyMap<number, SequencedTaskEvent[]>
   completedTaskCache?: Map<string, ProjectedTaskCacheEntry>
   errorImages?: Map<string, string>
   visionImages?: Map<string, string>
@@ -439,6 +446,28 @@ const collectTaskScopes = (
   }
 }
 
+const buildNextTaskOccurrenceSeq = (
+  scopes: ScopeNode[],
+): Map<ScopeNode, number> => {
+  const nextSeqByScope = new Map<ScopeNode, number>()
+  const nextSeqByTaskAndSource = new Map<string, number>()
+
+  for (let index = scopes.length - 1; index >= 0; index -= 1) {
+    const scope = scopes[index]
+    if (!scope) continue
+    const taskId = readScopeTaskId(scope)
+    if (taskId == null) continue
+    const key = `${taskId}\u0000${readScopeSourceKey(scope) ?? ''}`
+    const nextSeq = nextSeqByTaskAndSource.get(key)
+    if (nextSeq != null) {
+      nextSeqByScope.set(scope, nextSeq)
+    }
+    nextSeqByTaskAndSource.set(key, scope.seq)
+  }
+
+  return nextSeqByScope
+}
+
 const readTaskEventTaskId = (
   event: EventNotification,
 ): number | undefined => {
@@ -457,11 +486,65 @@ const getEventTimestampMs = (event: EventNotification): number => {
   return parsed
 }
 
+const readScopeSourceKey = (scope: ScopeNode): string | undefined => {
+  const source = readRecord(readScopePayload(scope).source)
+  return source ? readStringField(source, 'sourceKey') : undefined
+}
+
+const copyTaskEvent = (event: EventNotification): EventNotification => ({
+  timestamp: event.timestamp,
+  level: event.level,
+  message: event.message,
+  details: event.details,
+  _lineNumber: event._lineNumber,
+})
+
+const findFirstSequencedEventIndex = (
+  events: SequencedTaskEvent[],
+  targetSeq: number,
+): number => {
+  let low = 0
+  let high = events.length
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2)
+    const event = events[middle]
+    if (event && event.seq < targetSeq) {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  return low
+}
+
 const projectTaskEvents = (
   scope: ScopeNode,
   options: ProjectTasksFromTraceOptions,
+  nextOccurrenceSeq?: number,
 ): EventNotification[] => {
   const taskId = readScopeTaskId(scope)
+  const sequencedEvents = taskId == null
+    ? undefined
+    : options.sequencedEventsByTaskId?.get(taskId)
+
+  if (taskId != null && sequencedEvents) {
+    const sourceKey = readScopeSourceKey(scope)
+    const scopeEndSeq = scope.endSeq ?? Number.POSITIVE_INFINITY
+    const occurrenceEndSeq = nextOccurrenceSeq == null
+      ? scopeEndSeq
+      : Math.min(scopeEndSeq, nextOccurrenceSeq - 1)
+
+    const projectedEvents: EventNotification[] = []
+    const firstEventIndex = findFirstSequencedEventIndex(sequencedEvents, scope.seq)
+    for (let index = firstEventIndex; index < sequencedEvents.length; index += 1) {
+      const item = sequencedEvents[index]
+      if (!item || item.seq > occurrenceEndSeq) break
+      if (sourceKey != null && item.sourceKey !== sourceKey) continue
+      projectedEvents.push(copyTaskEvent(item.event))
+    }
+    return projectedEvents
+  }
+
   const events = taskId == null
     ? undefined
     : options.eventsByTaskId?.get(taskId) ?? options.events
@@ -477,13 +560,7 @@ const projectTaskEvents = (
       if (!Number.isFinite(startMs) || !Number.isFinite(eventMs)) return true
       return eventMs >= startMs && eventMs <= endMs + 1
     })
-    .map((event) => ({
-      timestamp: event.timestamp,
-      level: event.level,
-      message: event.message,
-      details: event.details,
-      _lineNumber: event._lineNumber,
-    }))
+    .map(copyTaskEvent)
 }
 
 const projectFlowChildren = (
@@ -824,6 +901,7 @@ const projectPipelineNodeScope = (
 const projectTaskScope = (
   scope: ScopeNode,
   options: ProjectTasksFromTraceOptions,
+  nextOccurrenceSeq?: number,
 ): TaskInfo => {
   const payload = readScopePayload(scope)
   const pipelineScopes = sortScopesBySeq(scope.children).filter((child) => child.kind === 'pipeline_node')
@@ -839,7 +917,7 @@ const projectTaskScope = (
     end_time: scope.endTs,
     status: toTaskStatus(scope.status),
     nodes,
-    events: projectTaskEvents(scope, options),
+    events: projectTaskEvents(scope, options, nextOccurrenceSeq),
     duration: buildDuration(scope.ts, scope.endTs),
   }
 }
@@ -847,17 +925,18 @@ const projectTaskScope = (
 const projectTaskScopeWithCache = (
   scope: ScopeNode,
   options: ProjectTasksFromTraceOptions,
+  nextOccurrenceSeq?: number,
 ): TaskInfo => {
   const endSeq = scope.endSeq
   const canCache = scope.status !== 'running' && endSeq != null
   if (!canCache || !options.completedTaskCache) {
-    return projectTaskScope(scope, options)
+    return projectTaskScope(scope, options, nextOccurrenceSeq)
   }
 
   const cached = options.completedTaskCache.get(scope.id)
   if (cached?.endSeq === endSeq) return cached.task
 
-  const task = projectTaskScope(scope, options)
+  const task = projectTaskScope(scope, options, nextOccurrenceSeq)
   options.completedTaskCache.set(scope.id, { endSeq, task })
   return task
 }
@@ -941,11 +1020,17 @@ export const projectTasksFromTrace = (
 ): TaskInfo[] => {
   const taskScopes: ScopeNode[] = []
   collectTaskScopes(root, taskScopes)
+  const sortedTaskScopes = sortScopesBySeq(taskScopes)
+  const nextOccurrenceSeqByScope = buildNextTaskOccurrenceSeq(sortedTaskScopes)
 
-  const projectedTaskEntries: ProjectedTaskEntry[] = sortScopesBySeq(taskScopes)
+  const projectedTaskEntries: ProjectedTaskEntry[] = sortedTaskScopes
     .map((scope) => ({
       seq: scope.seq,
-      task: projectTaskScopeWithCache(scope, options),
+      task: projectTaskScopeWithCache(
+        scope,
+        options,
+        nextOccurrenceSeqByScope.get(scope),
+      ),
     }))
 
   const rootResourceTaskEntries = collectRootResourceScopeGroups(root)

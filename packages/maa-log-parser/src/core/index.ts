@@ -51,7 +51,10 @@ export type {
   ParseLogBundleResult,
   ResolvedLogSourceInput,
 } from '../service/types'
-export type { ProjectTasksFromTraceOptions } from '../projector/taskProjector'
+export type {
+  ProjectTasksFromTraceOptions,
+  SequencedTaskEvent,
+} from '../projector/taskProjector'
 export {
   resetRawValueTransformer,
   setRawValueTransformer,

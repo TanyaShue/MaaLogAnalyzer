@@ -495,6 +495,62 @@ describe('LogParser sub task scoped node aggregation', () => {
     expect(mainTask?.nodes.length).toBe(1)
   })
 
+  it('binds reused task IDs to their own sequential executions', async () => {
+    const lines = [
+      makeEventLine(100, 'Tasker.Task.Starting', { task_id: 90, entry: 'First', hash: 'h-first', uuid: 'u-first' }),
+      makeEventLine(200, 'Tasker.Task.Succeeded', { task_id: 90, entry: 'First', hash: 'h-first', uuid: 'u-first' }),
+      makeEventLine(201, 'Tasker.Task.Starting', { task_id: 90, entry: 'Second', hash: 'h-second', uuid: 'u-second' }),
+      makeEventLine(300, 'Tasker.Task.Succeeded', { task_id: 90, entry: 'Second', hash: 'h-second', uuid: 'u-second' }),
+    ]
+
+    const parser = new LogParser()
+    await parser.parseFile(lines.join('\n'))
+    const tasks = parser.getTasksSnapshot().filter(item => item.task_id === 90)
+
+    expect(tasks).toHaveLength(2)
+    expect(tasks[0]?.events.map(event => event._lineNumber)).toEqual([1, 2])
+    expect(tasks[1]?.events.map(event => event._lineNumber)).toEqual([3, 4])
+  })
+
+  it('binds reused task IDs to the source that produced each trace occurrence', async () => {
+    const parser = new LogParser()
+    await parser.parseInputs([
+      {
+        sourceKey: 'source-a.log',
+        content: makeEventLine(100, 'Tasker.Task.Starting', {
+          task_id: 90,
+          entry: 'SourceA',
+          hash: 'h-a',
+          uuid: 'u-a',
+        }),
+      },
+      {
+        sourceKey: 'source-b.log',
+        content: [
+          makeEventLine(100, 'Tasker.Task.Starting', {
+            task_id: 90,
+            entry: 'SourceB',
+            hash: 'h-b',
+            uuid: 'u-b',
+          }),
+          makeEventLine(200, 'Tasker.Task.Succeeded', {
+            task_id: 90,
+            entry: 'SourceB',
+            hash: 'h-b',
+            uuid: 'u-b',
+          }),
+        ].join('\n'),
+      },
+    ], undefined, { yieldControl: null })
+
+    const tasks = parser.getTasksSnapshot().filter(item => item.task_id === 90)
+    const sourceATask = tasks.find(item => item.entry === 'SourceA')
+    const sourceBTask = tasks.find(item => item.entry === 'SourceB')
+
+    expect(sourceATask?.events.map(event => event.details.entry)).toEqual(['SourceA'])
+    expect(sourceBTask?.events.map(event => event.details.entry)).toEqual(['SourceB', 'SourceB'])
+  })
+
   it('deduplicates mirrored cross-source Tasker.Task.Starting for same task_id and uuid', async () => {
     const lines = [
       makeEventLine(191, 'Tasker.Task.Starting', { task_id: 91, entry: 'MainTask', hash: 'h-main-91', uuid: 'u-main-91' }, {
@@ -565,7 +621,9 @@ describe('LogParser sub task scoped node aggregation', () => {
     expect(matchedTasks).toHaveLength(2)
     expect(matchedTasks.map(item => item.status)).toEqual(['running', 'succeeded'])
     expect(matchedTasks[0]?.nodes).toEqual([])
+    expect(matchedTasks[0]?.events.map(event => event._lineNumber)).toEqual([1])
     expect(matchedTasks[1]?.nodes).toHaveLength(1)
+    expect(matchedTasks[1]?.events.map(event => event._lineNumber)).toEqual([2, 3, 4, 5])
   })
 
   it('ignores non-numeric task_id in Tasker.Task lifecycle events', async () => {

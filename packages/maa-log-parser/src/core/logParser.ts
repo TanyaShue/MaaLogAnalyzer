@@ -24,6 +24,7 @@ import { buildTraceIndex, type TraceIndex } from '../query/traceIndex'
 import {
   projectTasksFromTrace,
   type ProjectedTaskCacheEntry,
+  type SequencedTaskEvent,
 } from '../projector/taskProjector'
 import {
   cloneRawLineStore,
@@ -132,7 +133,7 @@ export class LogParser {
   private events: EventNotification[] = []
   private protocolEvents: ProtocolEvent[] = []
   private traceReducer = createIncrementalTraceReducer()
-  private eventsByTaskId = new Map<number, EventNotification[]>()
+  private sequencedEventsByTaskId = new Map<number, SequencedTaskEvent[]>()
   private completedTaskCache = new Map<string, ProjectedTaskCacheEntry>()
   private rawLines: RawLineStore | null = null
   private eventTokenPool = new Map<string, string>()
@@ -179,7 +180,7 @@ export class LogParser {
     this.events = []
     this.protocolEvents = []
     this.traceReducer.reset()
-    this.eventsByTaskId.clear()
+    this.sequencedEventsByTaskId.clear()
     this.completedTaskCache.clear()
     this.rawLines = null
     this.lastEventBySignature.clear()
@@ -272,11 +273,16 @@ export class LogParser {
       this.protocolEvents.push(protocolEvent)
       this.traceReducer.append(protocolEvent)
       if ('taskId' in protocolEvent && protocolEvent.taskId != null) {
-        const taskEvents = this.eventsByTaskId.get(protocolEvent.taskId)
+        const sequencedEvent: SequencedTaskEvent = {
+          seq: protocolEvent.seq,
+          sourceKey: protocolEvent.source.sourceKey,
+          event: storedEvent,
+        }
+        const taskEvents = this.sequencedEventsByTaskId.get(protocolEvent.taskId)
         if (taskEvents) {
-          taskEvents.push(storedEvent)
+          taskEvents.push(sequencedEvent)
         } else {
-          this.eventsByTaskId.set(protocolEvent.taskId, [storedEvent])
+          this.sequencedEventsByTaskId.set(protocolEvent.taskId, [sequencedEvent])
         }
       }
     }
@@ -510,7 +516,7 @@ export class LogParser {
     this.events = []
     this.protocolEvents = []
     this.traceReducer.reset()
-    this.eventsByTaskId.clear()
+    this.sequencedEventsByTaskId.clear()
     this.completedTaskCache.clear()
     this.rawLines = null
     this.lastEventBySignature.clear()
@@ -524,7 +530,7 @@ export class LogParser {
   private projectTasksSnapshot(consume: boolean): TaskInfo[] {
     const trace = this.traceReducer.getTrace()
     const tasks = projectTasksFromTrace(trace, {
-      eventsByTaskId: this.eventsByTaskId,
+      sequencedEventsByTaskId: this.sequencedEventsByTaskId,
       completedTaskCache: this.completedTaskCache,
       errorImages: this.errorImages,
       visionImages: this.visionImages,
