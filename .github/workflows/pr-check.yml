@@ -83,6 +83,12 @@ jobs:
         if: matrix.platform == 'linux'
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Rust 依赖漏洞审计
+        if: matrix.platform == 'linux'
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --file src-tauri/Cargo.lock
+
       - name: 类型检查
         run: pnpm run build
 
