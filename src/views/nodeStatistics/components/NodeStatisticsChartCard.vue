@@ -2,25 +2,7 @@
 import { computed, defineAsyncComponent } from 'vue'
 import { NCard } from 'naive-ui'
 
-const VChart = defineAsyncComponent(async () => {
-  const [echartsCore, echartsRenderers, echartsCharts, echartsComponents, vueEcharts] = await Promise.all([
-    import('echarts/core'),
-    import('echarts/renderers'),
-    import('echarts/charts'),
-    import('echarts/components'),
-    import('vue-echarts'),
-  ])
-
-  echartsCore.use([
-    echartsRenderers.CanvasRenderer,
-    echartsCharts.BarChart,
-    echartsComponents.TitleComponent,
-    echartsComponents.TooltipComponent,
-    echartsComponents.GridComponent,
-  ])
-
-  return vueEcharts.default
-})
+const VChart = defineAsyncComponent(() => import('./chartRuntime'))
 
 const props = defineProps<{
   visible: boolean

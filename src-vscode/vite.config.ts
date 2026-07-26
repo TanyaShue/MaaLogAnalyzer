@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [vue()],
   base: './',
   root: path.resolve(__dirname, '..'),
+  worker: {
+    format: 'es',
+  },
   build: {
     outDir: path.resolve(__dirname, 'webview'),
     assetsDir: 'assets',

@@ -1,5 +1,5 @@
 import type { Node, Edge } from '@vue-flow/core'
-import type ELK from 'elkjs/lib/elk.bundled.js'
+import type ELK from 'elkjs/lib/elk-api.js'
 import type { TaskInfo, NodeInfo } from '../types'
 import { sortNodesByGlobalExecutionOrder } from '@windsland52/maa-log-tools/task-execution-order'
 import {
@@ -54,10 +54,16 @@ let elkPromise: Promise<ElkLayoutEngine> | null = null
 
 const getElk = async (): Promise<ElkLayoutEngine> => {
   if (!elkPromise) {
-    elkPromise = import('elkjs/lib/elk.bundled.js').then((module) => {
-      const ElkConstructor = module.default
-      return new ElkConstructor()
-    })
+    elkPromise = import.meta.env.SSR
+      ? import('elkjs/lib/elk.bundled.js').then(({ default: ElkConstructor }) => (
+          new ElkConstructor()
+        ))
+      : Promise.all([
+          import('elkjs/lib/elk-api.js'),
+          import('elkjs/lib/elk-worker.min.js?worker'),
+        ]).then(([{ default: ElkConstructor }, { default: ElkWorker }]) => (
+          new ElkConstructor({ workerFactory: () => new ElkWorker() })
+        ))
   }
 
   return elkPromise

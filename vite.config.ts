@@ -50,6 +50,9 @@ export default defineConfig({
       // 如果你的项目还有其他入口（如 main.ts），可以继续加
     ]
   },
+  worker: {
+    format: 'es',
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
