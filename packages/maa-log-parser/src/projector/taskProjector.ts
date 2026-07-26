@@ -87,7 +87,39 @@ const toRuntimeStatus = (
 const sortScopesBySeq = (
   scopes: ScopeNode[],
 ): ScopeNode[] => {
-  return [...scopes].sort((left, right) => left.seq - right.seq)
+  for (let index = 1; index < scopes.length; index += 1) {
+    if ((scopes[index - 1]?.seq ?? 0) > (scopes[index]?.seq ?? 0)) {
+      return [...scopes].sort((left, right) => left.seq - right.seq)
+    }
+  }
+  return scopes
+}
+
+const mergeProjectedTaskEntries = (
+  left: ProjectedTaskEntry[],
+  right: ProjectedTaskEntry[],
+): ProjectedTaskEntry[] => {
+  if (left.length === 0) return right
+  if (right.length === 0) return left
+
+  const merged = new Array<ProjectedTaskEntry>(left.length + right.length)
+  let leftIndex = 0
+  let rightIndex = 0
+  let outputIndex = 0
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const leftEntry = left[leftIndex]!
+    const rightEntry = right[rightIndex]!
+    if (leftEntry.seq <= rightEntry.seq) {
+      merged[outputIndex++] = leftEntry
+      leftIndex += 1
+    } else {
+      merged[outputIndex++] = rightEntry
+      rightIndex += 1
+    }
+  }
+  while (leftIndex < left.length) merged[outputIndex++] = left[leftIndex++]!
+  while (rightIndex < right.length) merged[outputIndex++] = right[rightIndex++]!
+  return merged
 }
 
 const readRecord = (
@@ -1046,8 +1078,7 @@ export const projectTasksFromTrace = (
     .map((groupedScopes, groupIndex) => projectRootResourceTaskEntry(groupedScopes, projectionOptions, groupIndex))
     .filter((entry): entry is ProjectedTaskEntry => !!entry)
 
-  return [...projectedTaskEntries, ...rootResourceTaskEntries]
-    .sort((left, right) => left.seq - right.seq)
+  return mergeProjectedTaskEntries(projectedTaskEntries, rootResourceTaskEntries)
     .map(({ task }) => task)
     .filter((task) => task.entry !== 'MaaTaskerPostStop')
 }
