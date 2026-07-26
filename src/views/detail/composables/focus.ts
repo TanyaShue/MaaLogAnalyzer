@@ -76,7 +76,7 @@ const getValueByPath = (
     return details[path]
   }
 
-  const segments = path.split(/[\.\[\]]+/).filter(Boolean)
+  const segments = path.split(/[.[\]]+/).filter(Boolean)
   let current: unknown = details
 
   for (const segment of segments) {

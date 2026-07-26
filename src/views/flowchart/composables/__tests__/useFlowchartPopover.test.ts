@@ -8,7 +8,7 @@ describe('useFlowchartPopover', () => {
   })
 
   it('finds node IDs containing CSS selector syntax without interpolation', () => {
-    const unsafeId = 'node\"\\]#target'
+    const unsafeId = 'node"\\]#target'
     const nodeElement = {
       getAttribute: (name: string) => name === 'data-id' ? unsafeId : null,
       getBoundingClientRect: () => ({

@@ -9,7 +9,7 @@ const SRC_ROOT = path.join(REPO_ROOT, 'src')
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.vue'])
 
-const IMPORT_SOURCE_REGEX = /\bfrom\s*['\"]([^'\"]+)['\"]|\bimport\s*\(\s*['\"]([^'\"]+)['\"]\s*\)/g
+const IMPORT_SOURCE_REGEX = /\bfrom\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
 
 const collectSourceFiles = (dirPath: string, output: string[]) => {
   const entries = readdirSync(dirPath, { withFileTypes: true })
