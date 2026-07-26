@@ -4,6 +4,7 @@ import { toastError } from '../../../../utils/toast'
 import { ensureSearchPreconditions } from './preconditions'
 import type { TextSearchSearchExecutorOptions } from './executorTypes'
 import { buildSearchExecutionSnapshot } from './optionBuilders'
+import { clearSearchResultState } from './executorHelpers'
 
 interface PerformSearchActionDependencies {
   ensurePreconditions?: typeof ensureSearchPreconditions
@@ -55,6 +56,10 @@ export const createPerformSearchAction = (
       )
     } catch (error) {
       if (isCurrent()) {
+        clearSearchResultState({
+          searchResults: options.searchResults,
+          totalMatches: options.totalMatches,
+        })
         reportError(error)
       }
     } finally {

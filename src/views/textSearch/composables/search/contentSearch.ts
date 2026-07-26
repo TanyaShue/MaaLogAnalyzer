@@ -7,7 +7,6 @@ const yieldToMainThread = () => new Promise<void>((resolve) => setTimeout(resolv
 
 export const runContentSearch = async (options: NormalSearchOptions): Promise<SearchResult[] | null> => {
   const searchPattern = compileSearchPattern(options.keyword, options.useRegex, options.caseSensitive)
-  if (options.useRegex && !searchPattern) return null
 
   const results: SearchResult[] = []
   let cursor = 0

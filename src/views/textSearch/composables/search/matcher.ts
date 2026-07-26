@@ -10,7 +10,7 @@ export const compileSearchPattern = (keyword: string, useRegex: boolean, caseSen
   try {
     return new RegExp(keyword, caseSensitive ? '' : 'i')
   } catch {
-    return null
+    throw new Error('无效的正则表达式')
   }
 }
 

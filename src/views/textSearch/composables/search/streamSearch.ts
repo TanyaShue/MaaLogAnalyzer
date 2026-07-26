@@ -9,9 +9,6 @@ import { forEachFileLine } from '../stream/fileLineReader'
 
 export const runStreamSearch = async (options: StreamSearchOptions): Promise<SearchResult[] | null> => {
   const searchPattern = compileSearchPattern(options.keyword, options.useRegex, options.caseSensitive)
-  if (options.useRegex && !searchPattern) {
-    return null
-  }
 
   const results: SearchResult[] = []
   await forEachFileLine(

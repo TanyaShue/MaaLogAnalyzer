@@ -7,14 +7,9 @@ import {
 } from './matcher'
 
 export const runNormalSearch = async (options: NormalSearchOptions): Promise<SearchResult[] | null> => {
+  const searchPattern = compileSearchPattern(options.keyword, options.useRegex, options.caseSensitive)
   return new Promise((resolve) => {
     setTimeout(() => {
-      const searchPattern = compileSearchPattern(options.keyword, options.useRegex, options.caseSensitive)
-      if (options.useRegex && !searchPattern) {
-        resolve(null)
-        return
-      }
-
       const lines = options.content.split('\n')
       const results: SearchResult[] = []
 

@@ -181,4 +181,27 @@ describe('createPerformSearchAction', () => {
     expect(options.searchResults.value).toEqual([])
     expect(options.isSearching.value).toBe(false)
   })
+
+  it('clears stale results and keeps invalid regex searches out of history', async () => {
+    const { options, addToHistory } = createOptions()
+    const reportError = vi.fn<(error: unknown) => void>()
+    options.searchText.value = '['
+    options.useRegex.value = true
+    options.searchResults.value = [createResult('stale result')]
+    options.totalMatches.value = 1
+    const performSearch = createPerformSearchAction(options, {
+      ensurePreconditions: async () => true,
+      reportError,
+    })
+
+    await performSearch()
+
+    expect(options.searchResults.value).toEqual([])
+    expect(options.totalMatches.value).toBe(0)
+    expect(addToHistory).not.toHaveBeenCalled()
+    expect(reportError).toHaveBeenCalledOnce()
+    expect(reportError.mock.calls[0]?.[0]).toMatchObject({
+      message: '无效的正则表达式',
+    })
+  })
 })
