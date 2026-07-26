@@ -8,6 +8,7 @@
 
 import {
   createPrimaryLogSelectionOptions,
+  isPrimaryLogFileName,
   selectPrimaryLogGroup,
   sortLoadedPrimaryLogSegments,
   type PrimaryLogSelectionOption,
@@ -22,6 +23,10 @@ import {
   extractWaitFreezesImages,
   extractSearchTextFiles,
 } from './archiveShared'
+import type { ArchiveLimits } from './archiveLimits'
+import { extractSevenZipEntries } from './sevenZipExtractor'
+
+export { ensureSevenZipModule } from './sevenZipExtractor'
 
 export interface ArchiveExtractResult {
   content: string
@@ -30,6 +35,10 @@ export interface ArchiveExtractResult {
   waitFreezesImages: Map<string, string>
   textFiles: ExtractedTextFile[]
   primaryLogFiles: LoadedPrimaryLogFile[]
+}
+
+export interface ExtractArchiveOptions {
+  archiveLimits?: Partial<ArchiveLimits>
 }
 
 export type ArchiveFormat = 'zip' | '7z' | 'rar' | 'unknown'
@@ -46,121 +55,20 @@ export function isSupportedArchive(fileName: string): boolean {
   return getArchiveFormat(fileName) !== 'unknown'
 }
 
-type SevenZipModule = Awaited<ReturnType<typeof import('7z-wasm')['default']>> | null
-let sevenZipInstance: SevenZipModule = null
-let sevenZipLoading: Promise<SevenZipModule> | null = null
-
-export async function ensureSevenZipModule(): Promise<SevenZipModule> {
-  if (sevenZipInstance) return sevenZipInstance
-  if (sevenZipLoading) return sevenZipLoading
-
-  sevenZipLoading = (async () => {
-    try {
-      const SevenZip = await import('7z-wasm')
-      sevenZipInstance = await SevenZip.default()
-      sevenZipLoading = null
-      return sevenZipInstance
-    } catch (error) {
-      sevenZipLoading = null
-      throw new Error(`加载 7z 解压模块失败: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })()
-
-  return sevenZipLoading
-}
-
-async function extractWithSevenZip(
-  file: File,
-  onProgress?: (message: string) => void,
-): Promise<Map<string, Uint8Array>> {
-  onProgress?.('正在加载解压模块...')
-  const moduleResult = await ensureSevenZipModule()
-  if (!moduleResult) throw new Error('7z 模块未加载')
-  const sz = moduleResult
-
-  const buffer = await file.arrayBuffer()
-  const archiveData = new Uint8Array(buffer)
-
-  const workDir = '/tmp/extract'
-  try { sz.FS.mkdir(workDir) } catch { /* exists */ }
-
-  const archivePath = `${workDir}/${file.name}`
-  sz.FS.writeFile(archivePath, archiveData)
-
-  onProgress?.('正在解压文件...')
-
-  const outputDir = `${workDir}/out`
-  try { sz.FS.mkdir(outputDir) } catch { /* exists */ }
-
-  sz.callMain(['x', archivePath, `-o${outputDir}`, '-aoa', '-y'])
-
-  const files = new Map<string, Uint8Array>()
-
-  function readDirRecursive(dir: string, prefix: string) {
-    let entries: string[]
-    try {
-      entries = sz.FS.readdir(dir)
-    } catch {
-      return
-    }
-
-    for (const entry of entries) {
-      if (entry === '.' || entry === '..') continue
-      const fullPath = `${dir}/${entry}`
-      const relativePath = prefix ? `${prefix}/${entry}` : entry
-
-      try {
-        const stat = sz.FS.stat(fullPath)
-        if (sz.FS.isDir(stat.mode)) {
-          readDirRecursive(fullPath, relativePath)
-        } else {
-          const data = sz.FS.readFile(fullPath)
-          files.set(relativePath, data)
-        }
-      } catch {
-        // skip unreadable files
-      }
-    }
-  }
-
-  readDirRecursive(outputDir, '')
-
-  try {
-    sz.FS.unlink(archivePath)
-    function removeDirRecursive(dir: string) {
-      const entries = sz.FS.readdir(dir)
-      for (const entry of entries) {
-        if (entry === '.' || entry === '..') continue
-        const fullPath = `${dir}/${entry}`
-        const stat = sz.FS.stat(fullPath)
-        if (sz.FS.isDir(stat.mode)) {
-          removeDirRecursive(fullPath)
-        } else {
-          sz.FS.unlink(fullPath)
-        }
-      }
-      sz.FS.rmdir(dir)
-    }
-    removeDirRecursive(outputDir)
-  } catch {
-    // cleanup failure does not affect result
-  }
-
-  return files
-}
-
 export async function extractArchiveContent(
   file: File,
   selectPrimaryLogs?: (options: PrimaryLogSelectionOption[]) => Promise<PrimaryLogSelectionOption[] | null>,
   onProgress?: (message: string) => void,
+  options: ExtractArchiveOptions = {},
 ): Promise<ArchiveExtractResult | null> {
-  return extractArchiveContents([file], selectPrimaryLogs, onProgress)
+  return extractArchiveContents([file], selectPrimaryLogs, onProgress, options)
 }
 
 export async function extractArchiveContents(
   archiveFiles: readonly File[],
   selectPrimaryLogs?: (options: PrimaryLogSelectionOption[]) => Promise<PrimaryLogSelectionOption[] | null>,
   onProgress?: (message: string) => void,
+  options: ExtractArchiveOptions = {},
 ): Promise<ArchiveExtractResult | null> {
   const file = archiveFiles[0]
   if (!file) return null
@@ -170,11 +78,13 @@ export async function extractArchiveContents(
   switch (format) {
     case 'zip':
       const { extractZipContents } = await import('./zipExtractor')
-      return extractZipContents(archiveFiles, selectPrimaryLogs)
+      return extractZipContents(archiveFiles, selectPrimaryLogs, {
+        archiveLimits: options.archiveLimits,
+      })
 
     case '7z':
     case 'rar':
-      return extractSevenZipOrRar(file, selectPrimaryLogs, onProgress)
+      return extractSevenZipOrRar(file, selectPrimaryLogs, onProgress, options)
 
     default:
       throw new Error(`不支持的压缩包格式: ${file.name}`)
@@ -185,41 +95,40 @@ async function extractSevenZipOrRar(
   file: File,
   selectPrimaryLogs?: (options: PrimaryLogSelectionOption[]) => Promise<PrimaryLogSelectionOption[] | null>,
   onProgress?: (message: string) => void,
+  options: ExtractArchiveOptions = {},
 ): Promise<ArchiveExtractResult | null> {
+  let neededPaths: string[] = []
+  let selectedLogs: ReturnType<typeof selectPrimaryLogGroup> = []
+  let selectedPaths = new Set<string>()
 
-  const files = await extractWithSevenZip(file, onProgress)
+  const neededFiles = await extractSevenZipEntries(file, async (entries) => {
+    neededPaths = entries
+      .filter(entry => !entry.isDirectory && isNeededFile(entry.path))
+      .map(entry => entry.path)
+    if (neededPaths.length === 0) return null
 
-  const neededFiles = new Map<string, Uint8Array>()
-  for (const [path, data] of files) {
-    if (isNeededFile(path)) {
-      neededFiles.set(path, data)
-    }
-  }
+    selectedLogs = selectPrimaryLogGroup(neededPaths.map((path) => ({
+      path,
+      name: path.split('/').pop() || path,
+    })))
+    if (selectedLogs.length === 0) return null
 
-  if (neededFiles.size === 0) {
-    return null
-  }
+    const selectedOptions = selectPrimaryLogs
+      ? await selectPrimaryLogs(createPrimaryLogSelectionOptions(selectedLogs.map(({ item }) => item)))
+      : createPrimaryLogSelectionOptions(selectedLogs.map(({ item }) => item))
+    if (!selectedOptions || selectedOptions.length === 0) return null
 
-  const neededPaths = Array.from(neededFiles.keys())
+    selectedPaths = new Set(selectedOptions.map(option => option.path))
+    return neededPaths.filter((path) => {
+      const name = path.split('/').pop() || path
+      return !isPrimaryLogFileName(name) || selectedPaths.has(path)
+    })
+  }, {
+    archiveLimits: options.archiveLimits,
+    onProgress,
+  })
 
-  const selectedLogs = selectPrimaryLogGroup(neededPaths.map((path) => ({
-    path,
-    name: path.replace(/\\/g, '/').split('/').pop() || path,
-  })))
-
-  if (selectedLogs.length === 0) {
-    return null
-  }
-
-  const selectedOptions = selectPrimaryLogs
-    ? await selectPrimaryLogs(createPrimaryLogSelectionOptions(selectedLogs.map(({ item }) => item)))
-    : createPrimaryLogSelectionOptions(selectedLogs.map(({ item }) => item))
-
-  if (!selectedOptions || selectedOptions.length === 0) {
-    return null
-  }
-
-  const selectedPaths = new Set(selectedOptions.map(option => option.path))
+  if (!neededFiles) return null
 
   const basePath = selectedLogs[0].candidate.dirPath
   const loadedLogs = selectedLogs
