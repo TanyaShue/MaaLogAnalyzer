@@ -57,6 +57,13 @@ jobs:
         if: matrix.platform == 'linux'
         run: pnpm test -- --pool=threads --maxWorkers=1 --minWorkers=1
 
+      - name: VS Code 扩展构建检查
+        if: matrix.platform == 'linux'
+        run: |
+          npm --prefix src-vscode ci
+          pnpm run build:vscode
+          npm --prefix src-vscode run compile
+
       - name: Rust 缓存
         uses: swatinem/rust-cache@v2
         with:
