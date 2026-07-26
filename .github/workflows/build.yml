@@ -246,7 +246,7 @@ jobs:
 
             构建于: ${{ github.event.head_commit.timestamp }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/*-artifacts/**/*.msi
             artifacts/*-artifacts/**/*.dmg

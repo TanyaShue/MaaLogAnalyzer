@@ -59,8 +59,11 @@ describe('release workflow shell safety', () => {
   })
 
   it('creates desktop releases only for version tags', () => {
-    expect(readWorkflow('build.yml')).toMatch(
+    const workflow = readWorkflow('build.yml')
+    expect(workflow).toMatch(
       /\n  release:\r?\n    if: startsWith\(github\.ref, 'refs\/tags\/v'\)/,
     )
+    expect(workflow).toContain("prerelease: ${{ contains(github.ref_name, '-') }}")
+    expect(workflow).not.toContain('prerelease: false')
   })
 })
