@@ -571,11 +571,28 @@ const collectTaskRawLines = (
     : filtered
 }
 
+const parseTokensByStore = new WeakMap<
+  AnalyzerSessionStoreLike,
+  Map<string, symbol>
+>()
+
+const getParseTokens = (
+  store: AnalyzerSessionStoreLike,
+): Map<string, symbol> => {
+  let tokens = parseTokensByStore.get(store)
+  if (!tokens) {
+    tokens = new Map<string, symbol>()
+    parseTokensByStore.set(store, tokens)
+  }
+  return tokens
+}
+
 export const createAnalyzerToolHandlers = (
   options: AnalyzerToolHandlerOptions = {},
 ) => {
   const store = options.store ?? createAnalyzerSessionStore()
   const parseOptions = options.parse_options
+  const parseTokens = getParseTokens(store)
 
   return {
     store,
@@ -591,6 +608,9 @@ export const createAnalyzerToolHandlers = (
       if (!options.resolve_input) {
         return fail('INVALID_REQUEST', 'input resolver is not configured', [], startedAt)
       }
+
+      const parseToken = Symbol(args.session_id)
+      parseTokens.set(args.session_id, parseToken)
 
       try {
         const resolvedInputs: Array<{
@@ -640,6 +660,14 @@ export const createAnalyzerToolHandlers = (
           ...parseOptions,
           storeRawLines: true,
         })
+        if (parseTokens.get(args.session_id) !== parseToken) {
+          return fail(
+            'DATA_NOT_READY',
+            `parse_log_bundle for session_id=${args.session_id} was superseded by a newer request`,
+            [],
+            startedAt,
+          )
+        }
         const artifacts = parser.getParseArtifactsSnapshot()
         const tasks = parser.getTasksSnapshot()
         const warnings = buildWarnings(
@@ -666,8 +694,20 @@ export const createAnalyzerToolHandlers = (
           warnings,
         }, warnings, startedAt)
       } catch (error) {
+        if (parseTokens.get(args.session_id) !== parseToken) {
+          return fail(
+            'DATA_NOT_READY',
+            `parse_log_bundle for session_id=${args.session_id} was superseded by a newer request`,
+            [],
+            startedAt,
+          )
+        }
         const message = error instanceof Error ? error.message : String(error)
         return fail('INTERNAL_ERROR', message, [], startedAt)
+      } finally {
+        if (parseTokens.get(args.session_id) === parseToken) {
+          parseTokens.delete(args.session_id)
+        }
       }
     },
 
