@@ -196,7 +196,6 @@ const collectScopeEventEntries = (
 const toTimelineItems = (
   index: TraceIndex,
   execution: NodeExecutionRef,
-  limit?: number,
 ): ScopeTimeline[] => {
   const eventsResult = collectScopeEventEntries(index, execution.pipelineScopeId)
   if (!eventsResult.ok) return []
@@ -218,13 +217,12 @@ const toTimelineItems = (
     }
   })
 
-  return limit != null && limit >= 0 ? items.slice(0, limit) : items
+  return items
 }
 
 const toNextListHistoryItems = (
   index: TraceIndex,
   execution: NodeExecutionRef,
-  limit?: number,
 ): NextListHistoryItem[] => {
   const pipelineScope = index.scopeById.get(execution.pipelineScopeId)
   if (!pipelineScope) return []
@@ -257,7 +255,18 @@ const toNextListHistoryItems = (
     }
   })
 
-  return limit != null && limit >= 0 ? items.slice(0, limit) : items
+  return items
+}
+
+const applyQueryLimit = <T>(
+  items: T[],
+  limit?: number,
+): QueryResult<T[]> => {
+  if (limit == null) return ok(items)
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    return fail('invalid_locator', 'limit must be a non-negative safe integer')
+  }
+  return ok(items.slice(0, limit))
 }
 
 export const getParentChain = (
@@ -299,8 +308,9 @@ export const getNodeTimeline = (
   const executions = resolveNodeExecutions(index, locator)
   if (!executions.ok) return executions
 
-  return ok(
-    executions.value.flatMap((execution) => toTimelineItems(index, execution, limit)),
+  return applyQueryLimit(
+    executions.value.flatMap((execution) => toTimelineItems(index, execution)),
+    limit,
   )
 }
 
@@ -312,8 +322,9 @@ export const getNextListHistory = (
   const executions = resolveNodeExecutions(index, locator)
   if (!executions.ok) return executions
 
-  return ok(
-    executions.value.flatMap((execution) => toNextListHistoryItems(index, execution, limit)),
+  return applyQueryLimit(
+    executions.value.flatMap((execution) => toNextListHistoryItems(index, execution)),
+    limit,
   )
 }
 

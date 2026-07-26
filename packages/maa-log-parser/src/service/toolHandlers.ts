@@ -220,7 +220,9 @@ const validateLimit = (
   limit: number | undefined,
 ): string | null => {
   if (limit == null) return null
-  return limit >= 0 ? null : 'limit must be >= 0'
+  return Number.isSafeInteger(limit) && limit >= 0
+    ? null
+    : 'limit must be a non-negative safe integer'
 }
 
 const resolveSession = (
@@ -806,19 +808,16 @@ export const createAnalyzerToolHandlers = (
         return fail('NODE_NOT_FOUND', timelineResult.message, warnings, startedAt)
       }
 
-      const timeline = (args.limit != null && args.limit >= 0
-        ? timelineResult.value.slice(0, args.limit)
-        : timelineResult.value)
-        .map((item) => ({
-          scope_id: item.scopeId,
-          occurrence_index: item.occurrenceIndex,
-          ts: item.ts,
-          event: item.event,
-          node_id: item.nodeId ?? args.node_id,
-          name: item.name ?? '',
-          source_key: item.sourceKey ?? null,
-          line: item.line ?? null,
-        }))
+      const timeline = timelineResult.value.map((item) => ({
+        scope_id: item.scopeId,
+        occurrence_index: item.occurrenceIndex,
+        ts: item.ts,
+        event: item.event,
+        node_id: item.nodeId ?? args.node_id,
+        name: item.name ?? '',
+        source_key: item.sourceKey ?? null,
+        line: item.line ?? null,
+      }))
 
       return ok({
         timeline,
@@ -883,21 +882,18 @@ export const createAnalyzerToolHandlers = (
         return fail('NODE_NOT_FOUND', historyResult.message, warnings, startedAt)
       }
 
-      const history = (args.limit != null && args.limit >= 0
-        ? historyResult.value.slice(0, args.limit)
-        : historyResult.value)
-        .map((item) => ({
-          scope_id: item.scopeId,
-          occurrence_index: item.occurrenceIndex,
-          source_key: item.sourceKey ?? null,
-          line: item.line ?? null,
-          candidates: item.candidates.map((candidate) => ({
-            name: candidate.name,
-            anchor: candidate.anchor,
-            jump_back: candidate.jumpBack,
-          })),
-          outcome: item.outcome,
-        }))
+      const history = historyResult.value.map((item) => ({
+        scope_id: item.scopeId,
+        occurrence_index: item.occurrenceIndex,
+        source_key: item.sourceKey ?? null,
+        line: item.line ?? null,
+        candidates: item.candidates.map((candidate) => ({
+          name: candidate.name,
+          anchor: candidate.anchor,
+          jump_back: candidate.jumpBack,
+        })),
+        outcome: item.outcome,
+      }))
 
       return ok({
         history,

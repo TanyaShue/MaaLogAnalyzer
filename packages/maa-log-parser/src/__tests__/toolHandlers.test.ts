@@ -346,4 +346,25 @@ describe('Analyzer tool handlers', () => {
       expect(timeline.data.evidences.some((item) => item.payload.image_path === '/images/reco-vision.png')).toBe(true)
     }
   })
+
+  it('rejects limits that are not non-negative safe integers', async () => {
+    const handlers = createAnalyzerToolHandlers()
+
+    for (const limit of [1.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      const result = await handlers.get_node_timeline({
+        session_id: 'missing',
+        task_id: 1,
+        node_id: 101,
+        limit,
+      })
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'limit must be a non-negative safe integer',
+        },
+      })
+    }
+  })
 })

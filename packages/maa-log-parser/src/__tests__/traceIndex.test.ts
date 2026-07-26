@@ -112,6 +112,19 @@ describe('TraceIndex', () => {
       children: [nextList],
     }
 
+    const nextList2: ScopeNode = {
+      id: createScopeId('next_list', { taskId: 1 }, 11),
+      kind: 'next_list',
+      status: 'failed',
+      ts: '2026-04-08 00:00:11.000',
+      endTs: '2026-04-08 00:00:11.000',
+      seq: 11,
+      endSeq: 11,
+      taskId: 1,
+      payload: { taskId: 1, name: 'MainNode', list: [] },
+      children: [],
+    }
+
     const pipeline2: ScopeNode = {
       id: createScopeId('pipeline_node', { taskId: 1, nodeId: 101 }, 10),
       kind: 'pipeline_node',
@@ -122,7 +135,7 @@ describe('TraceIndex', () => {
       endSeq: 12,
       taskId: 1,
       payload: { taskId: 1, nodeId: 101, name: 'MainNode' },
-      children: [],
+      children: [nextList2],
     }
 
     const task: ScopeNode = {
@@ -191,6 +204,20 @@ describe('TraceIndex', () => {
     expect(scopeEvents).toEqual({
       ok: true,
       value: events.slice(0, 4),
+    })
+
+    expect(getNodeTimeline(index, { taskId: 1, nodeId: 101 }, 1)).toEqual({
+      ok: true,
+      value: [expect.objectContaining({ occurrenceIndex: 1, seq: 3 })],
+    })
+    expect(getNextListHistory(index, { taskId: 1, nodeId: 101 }, 1)).toEqual({
+      ok: true,
+      value: [expect.objectContaining({ occurrenceIndex: 1, scopeId: nextList.id })],
+    })
+    expect(getNodeTimeline(index, { taskId: 1, nodeId: 101 }, 1.5)).toEqual({
+      ok: false,
+      error: 'invalid_locator',
+      message: 'limit must be a non-negative safe integer',
     })
   })
 
