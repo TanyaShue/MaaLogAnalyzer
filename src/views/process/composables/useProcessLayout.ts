@@ -15,6 +15,8 @@ const clampLayoutSize = (value: unknown, min: number, max: number, fallback: num
   return Math.min(max, Math.max(min, value))
 }
 
+export const isPersistedLayoutCollapsed = (value: unknown) => value === true
+
 const readProcessLayoutState = (): ProcessLayoutState => {
   try {
     const raw = localStorage.getItem(PROCESS_LAYOUT_STORAGE_KEY)
@@ -47,7 +49,7 @@ export const useProcessLayout = (options: {
 }) => {
   const processLayoutState = readProcessLayoutState()
 
-  const taskListCollapsed = ref(Boolean(processLayoutState.taskListCollapsed))
+  const taskListCollapsed = ref(isPersistedLayoutCollapsed(processLayoutState.taskListCollapsed))
   const taskListSize = ref(
     taskListCollapsed.value
       ? 0
@@ -55,7 +57,7 @@ export const useProcessLayout = (options: {
   )
   const taskListSavedSize = ref(clampLayoutSize(processLayoutState.taskListSavedSize, 0.05, 0.4, 0.25))
 
-  const nodeNavCollapsed = ref(Boolean(processLayoutState.nodeNavCollapsed))
+  const nodeNavCollapsed = ref(isPersistedLayoutCollapsed(processLayoutState.nodeNavCollapsed))
   const nodeNavSize = ref(
     nodeNavCollapsed.value
       ? 0
