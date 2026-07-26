@@ -7,6 +7,7 @@ interface EnsureSearchSourceReadyOptions {
   fileName: Ref<string>
   fileContent: Ref<string>
   fileHandle: Ref<File | null>
+  prepareSourceMode: (mode: SourceMode) => void
   loadedTargets: Ref<LoadedSearchTarget[] | undefined>
   ensureDeferredLoadedTargetsReady: () => Promise<void>
   ensureLoadedTargetReady: () => Promise<boolean>
@@ -22,7 +23,7 @@ export const ensureSearchSourceReady = async (
     && !options.fileName.value
     && (options.loadedTargets.value?.length ?? 0) > 0
   ) {
-    options.sourceMode.value = 'loaded'
+    options.prepareSourceMode('loaded')
   }
 
   if (options.sourceMode.value === 'loaded') {

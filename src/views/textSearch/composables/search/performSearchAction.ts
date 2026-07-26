@@ -26,22 +26,33 @@ export const createPerformSearchAction = (
     const invocationId = ++latestInvocationId
     options.searchRequestGeneration.value += 1
     options.isSearching.value = false
+    const sourceIntentGeneration = options.sourceIntentGeneration.value
     const isLatestInvocation = () => invocationId === latestInvocationId
-    let isCurrent = isLatestInvocation
+    const isCurrentIntent = () => (
+      isLatestInvocation() &&
+      options.sourceIntentGeneration.value === sourceIntentGeneration
+    )
+    let isCurrent = isCurrentIntent
 
     try {
-      const preconditionsReady = await ensurePreconditions(options, isLatestInvocation)
-      if (!isLatestInvocation() || !preconditionsReady) return
+      const preconditionsReady = await ensurePreconditions(options, isCurrentIntent)
+      if (!isCurrentIntent() || !preconditionsReady) return
 
       const requestGeneration = options.searchRequestGeneration.value
+      const sourceLoadGeneration = options.sourceLoadGeneration.value
       isCurrent = () => (
-        isLatestInvocation() &&
-        options.searchRequestGeneration.value === requestGeneration
+        isCurrentIntent() &&
+        options.searchRequestGeneration.value === requestGeneration &&
+        options.sourceLoadGeneration.value === sourceLoadGeneration
       )
       const snapshot = buildSearchExecutionSnapshot(options)
       options.isSearching.value = true
 
-      await executeAndCommitSearch(options, { snapshot, isCurrent }, executeSearch)
+      await executeAndCommitSearch(
+        options,
+        { snapshot, isCurrent },
+        executeSearch,
+      )
     } catch (error) {
       if (isCurrent()) {
         reportError(error)

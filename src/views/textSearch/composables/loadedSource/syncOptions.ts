@@ -8,6 +8,8 @@ interface CreateLoadedSourceSyncOptionsInput {
   sourceMode: Ref<SourceMode>
   selectedLoadedTargetId: Ref<string>
   applyLoadedTarget: (target: LoadedSearchTarget | undefined) => Promise<void>
+  prepareSourceMode: (mode: SourceMode) => void
+  prepareLoadedTarget: (id: string) => void
 }
 
 export const createLoadedSourceSyncOptions = (
@@ -19,8 +21,11 @@ export const createLoadedSourceSyncOptions = (
     hasDeferredLoadedTargets: input.options.hasDeferredLoadedTargets,
     ensureLoadedTargets: input.options.ensureLoadedTargets,
     fileName: input.options.fileName,
+    sourceLoadGeneration: input.options.sourceLoadGeneration,
     sourceMode: input.sourceMode,
     selectedLoadedTargetId: input.selectedLoadedTargetId,
     applyLoadedTarget: input.applyLoadedTarget,
+    prepareSourceMode: input.prepareSourceMode,
+    prepareLoadedTarget: input.prepareLoadedTarget,
   }
 }

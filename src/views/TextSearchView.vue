@@ -63,6 +63,9 @@ const {
   selectedLoadedTargetId,
   sourceModeOptions,
   loadedTargetOptions,
+  selectSourceMode,
+  selectLoadedTarget,
+  beginManualFileSelection,
   quickSearchOptions,
   filterDebugInfo,
   searchHistory,
@@ -108,9 +111,10 @@ void contentPaneRef
       :search-history="searchHistory"
       :mobile-control-expanded-names="mobileControlExpandedNames"
       @file-upload="handleFileUpload"
+      @begin-file-selection="beginManualFileSelection"
       @clear-content="clearContent"
-      @update:source-mode="sourceMode = $event"
-      @update:selected-loaded-target-id="selectedLoadedTargetId = $event"
+      @update:source-mode="selectSourceMode"
+      @update:selected-loaded-target-id="selectLoadedTarget"
       @update:case-sensitive="caseSensitive = $event"
       @update:use-regex="useRegex = $event"
       @update:hide-debug-info="hideDebugInfo = $event"

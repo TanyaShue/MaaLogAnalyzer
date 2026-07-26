@@ -19,5 +19,7 @@ export const buildLoadedTargetSourceOptions = (
   showFileContent: state.showFileContent,
   contentKey: state.contentKey,
   isLoadingFile: state.isLoadingFile,
+  sourceLoadGeneration: state.sourceLoadGeneration,
+  sourceIntentGeneration: state.sourceIntentGeneration,
   resetSearchResultsOnly: state.resetSearchResultsOnly,
 })

@@ -9,19 +9,23 @@ export const setupLoadedTargetTargetsSync = (options: LoadedSourceSyncOptions) =
       const safeTargets = targets ?? []
       if (safeTargets.length === 0) {
         if (options.sourceMode.value === 'loaded') {
-          options.sourceMode.value = 'manual'
+          options.prepareSourceMode('manual')
         }
         return
       }
 
-      if (options.sourceMode.value === 'loaded' || !options.fileName.value) {
-        options.sourceMode.value = 'loaded'
+      if (options.sourceMode.value !== 'loaded') {
+        if (!options.fileName.value) {
+          options.prepareSourceMode('loaded')
+        } else {
+          return
+        }
       }
 
       const preferredId = resolveDefaultLoadedTargetId(safeTargets, defaultId)
 
       if (preferredId && options.selectedLoadedTargetId.value !== preferredId) {
-        options.selectedLoadedTargetId.value = preferredId
+        options.prepareLoadedTarget(preferredId)
         return
       }
 

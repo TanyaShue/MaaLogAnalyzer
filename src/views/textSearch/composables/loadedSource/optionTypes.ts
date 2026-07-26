@@ -16,12 +16,15 @@ export interface LoadedSourceStateOptions {
   showFileContent: Ref<boolean>
   contentKey: Ref<number>
   isLoadingFile: Ref<boolean>
+  sourceLoadGeneration: Ref<number>
+  sourceIntentGeneration: Ref<number>
   resetSearchResultsOnly: () => void
 }
 
 export interface LoadedSourceActionOptions extends LoadedSourceStateOptions {
   sourceMode: Ref<SourceMode>
   selectedLoadedTargetId: Ref<string>
+  prepareLoadedTarget: (id: string) => void
 }
 
 export interface LoadedSourceSyncOptions {
@@ -30,7 +33,10 @@ export interface LoadedSourceSyncOptions {
   hasDeferredLoadedTargets: Ref<boolean | undefined>
   ensureLoadedTargets: Ref<(() => Promise<void>) | undefined>
   fileName: Ref<string>
+  sourceLoadGeneration: Ref<number>
   sourceMode: Ref<SourceMode>
   selectedLoadedTargetId: Ref<string>
+  prepareSourceMode: (mode: SourceMode) => void
+  prepareLoadedTarget: (id: string) => void
   applyLoadedTarget: (target: LoadedSearchTarget | undefined) => Promise<void>
 }

@@ -7,6 +7,7 @@ import {
   mapLoadedTargetOptions,
   setupLoadedTargetSourceSync,
 } from './loadedSource'
+import { createSourceSelectionActions } from './loadedSource/selectionActions'
 export type { SourceMode }
 
 type UseLoadedTargetSourceOptions = LoadedSourceStateOptions
@@ -25,12 +26,28 @@ export const useLoadedTargetSource = (options: UseLoadedTargetSourceOptions) => 
   })
 
   const {
+    selectSourceMode,
+    selectLoadedTarget,
+    beginManualFileSelection,
+    prepareSourceMode,
+    prepareLoadedTarget,
+  } = createSourceSelectionActions({
+    sourceMode,
+    selectedLoadedTargetId,
+    sourceLoadGeneration: options.sourceLoadGeneration,
+    sourceIntentGeneration: options.sourceIntentGeneration,
+    isLoadingFile: options.isLoadingFile,
+    resetSearchResultsOnly: options.resetSearchResultsOnly,
+  })
+
+  const {
     applyLoadedTarget,
     ensureLoadedTargetReady,
     ensureDeferredLoadedTargetsReady,
   } = createLoadedSourceActions({
     sourceMode,
     selectedLoadedTargetId,
+    prepareLoadedTarget,
     ...options,
   })
 
@@ -39,6 +56,8 @@ export const useLoadedTargetSource = (options: UseLoadedTargetSourceOptions) => 
     sourceMode,
     selectedLoadedTargetId,
     applyLoadedTarget,
+    prepareSourceMode,
+    prepareLoadedTarget,
   }))
 
   return {
@@ -47,6 +66,10 @@ export const useLoadedTargetSource = (options: UseLoadedTargetSourceOptions) => 
     sourceModeOptions,
     loadedTargetOptions,
     applyLoadedTarget,
+    selectSourceMode,
+    selectLoadedTarget,
+    beginManualFileSelection,
+    prepareSourceMode,
     ensureLoadedTargetReady,
     ensureDeferredLoadedTargetsReady,
   }

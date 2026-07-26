@@ -10,6 +10,7 @@ export interface EnsureLoadedTargetReadyOptions {
   fileName: Ref<string>
   fileContent: Ref<string>
   fileHandle: Ref<File | null>
+  selectLoadedTarget: (id: string) => void
   applyLoadedTarget: (target: LoadedSearchTarget | undefined) => Promise<void>
 }
 

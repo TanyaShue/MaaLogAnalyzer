@@ -4,9 +4,12 @@ import type { SearchResult } from '../types'
 
 export interface TextSearchFileRuntimeOptions {
   sourceMode: Ref<SourceMode>
+  sourceLoadGeneration: Ref<number>
+  sourceIntentGeneration: Ref<number>
   isLoadingFile: Ref<boolean>
   isSearching: Ref<boolean>
   searchRequestGeneration: Ref<number>
+  resetSearchResultsOnly: () => void
   searchText: Ref<string>
   fileName: Ref<string>
   fileContent: Ref<string>
@@ -28,7 +31,10 @@ export interface TextSearchFileRuntimeOptions {
 
 export interface HandleRuntimeFileUploadOptions {
   sourceMode: Ref<SourceMode>
+  sourceLoadGeneration: Ref<number>
+  sourceIntentGeneration: Ref<number>
   isLoadingFile: Ref<boolean>
+  resetSearchResultsOnly: () => void
   fileName: Ref<string>
   fileSizeInMB: Ref<number>
   isLargeFile: Ref<boolean>
@@ -38,7 +44,10 @@ export interface HandleRuntimeFileUploadOptions {
 }
 
 export interface ClearRuntimeContentOptions {
+  sourceLoadGeneration: Ref<number>
+  sourceIntentGeneration: Ref<number>
   searchRequestGeneration: Ref<number>
+  isLoadingFile: Ref<boolean>
   isSearching: Ref<boolean>
   contentKey: Ref<number>
   showFileContent: Ref<boolean>
@@ -65,6 +74,7 @@ export interface JumpToLineRuntimeOptions {
 }
 
 export interface LoadContextLinesOptions {
+  sourceLoadGeneration: Ref<number>
   fileHandle: Ref<File | null>
   fileContent: Ref<string>
   totalLines: Ref<number>

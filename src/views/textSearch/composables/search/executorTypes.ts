@@ -10,7 +10,10 @@ export interface TextSearchSearchExecutorOptions {
   isLargeFile: Ref<boolean>
   isLoadingFile: Ref<boolean>
   isSearching: Ref<boolean>
+  sourceLoadGeneration: Ref<number>
+  sourceIntentGeneration: Ref<number>
   sourceMode: Ref<SourceMode>
+  prepareSourceMode: (mode: SourceMode) => void
   loadedTargets: Ref<LoadedSearchTarget[] | undefined>
   ensureDeferredLoadedTargetsReady: () => Promise<void>
   ensureLoadedTargetReady: () => Promise<boolean>

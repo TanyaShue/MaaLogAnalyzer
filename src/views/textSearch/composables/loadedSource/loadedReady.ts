@@ -15,26 +15,44 @@ export const ensureLoadedSourceReady = async (
   if (!targetId) return false
 
   if (options.selectedLoadedTargetId.value !== targetId) {
-    options.selectedLoadedTargetId.value = targetId
+    options.selectLoadedTarget(targetId)
   }
 
   const target = targets.find(item => item.id === targetId)
   if (!target) return false
 
-  const expectedName = target.fileName || target.label
-  const contentReady = hasLoadedContentReady(
-    options.fileName.value,
-    options.fileContent.value,
-    options.fileHandle.value,
+  const expected = {
+    id: target.id,
+    fileName: target.fileName,
+    label: target.label,
+    content: target.content,
+  }
+  const expectedName = expected.fileName || expected.label
+  const isExpectedTargetLoaded = () => (
+    options.sourceMode.value === 'loaded' &&
+    options.selectedLoadedTargetId.value === expected.id &&
+    options.fileHandle.value == null &&
+    options.fileName.value === expectedName &&
+    options.fileContent.value === expected.content &&
+    hasLoadedContentReady(
+      options.fileName.value,
+      options.fileContent.value,
+      options.fileHandle.value,
+    )
   )
-  const sameTargetLoaded = options.fileName.value === expectedName
-  if (!contentReady || !sameTargetLoaded) {
+
+  if (!isExpectedTargetLoaded()) {
     await options.applyLoadedTarget(target)
   }
 
-  return hasLoadedContentReady(
-    options.fileName.value,
-    options.fileContent.value,
-    options.fileHandle.value,
+  const currentTarget = (options.loadedTargets.value ?? []).find(
+    item => item.id === expected.id,
+  )
+  return Boolean(
+    currentTarget &&
+    currentTarget.fileName === expected.fileName &&
+    currentTarget.label === expected.label &&
+    currentTarget.content === expected.content &&
+    isExpectedTargetLoaded()
   )
 }

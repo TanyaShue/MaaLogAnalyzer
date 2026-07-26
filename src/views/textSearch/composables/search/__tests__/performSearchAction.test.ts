@@ -42,7 +42,10 @@ const createOptions = () => {
     isLargeFile: ref(false),
     isLoadingFile: ref(false),
     isSearching: ref(false),
+    sourceLoadGeneration: ref(0),
+    sourceIntentGeneration: ref(0),
     sourceMode: ref<SourceMode>('manual'),
+    prepareSourceMode: vi.fn(),
     loadedTargets: ref<LoadedSearchTarget[] | undefined>(undefined),
     ensureDeferredLoadedTargetsReady: async () => {},
     ensureLoadedTargetReady: async () => true,
@@ -132,7 +135,7 @@ describe('createPerformSearchAction', () => {
     expect(options.searchResults.value).toEqual([createResult('second result')])
   })
 
-  it('ignores results and errors after the request generation is invalidated', async () => {
+  it('ignores results and errors after the source generation is invalidated', async () => {
     const { options, addToHistory } = createOptions()
     const pending = createDeferred<SearchResult[] | null>()
     const reportError = vi.fn<(error: unknown) => void>()
@@ -146,7 +149,7 @@ describe('createPerformSearchAction', () => {
     const run = performSearch()
     await vi.waitFor(() => expect(options.isSearching.value).toBe(true))
 
-    options.searchRequestGeneration.value += 1
+    options.sourceLoadGeneration.value += 1
     options.isSearching.value = false
     pending.reject(new Error('stale failure'))
     await run
@@ -154,6 +157,28 @@ describe('createPerformSearchAction', () => {
     expect(options.searchResults.value).toEqual([])
     expect(addToHistory).not.toHaveBeenCalled()
     expect(reportError).not.toHaveBeenCalled()
+    expect(options.isSearching.value).toBe(false)
+  })
+
+  it('does not migrate a deferred search onto a new user-selected source', async () => {
+    const { options } = createOptions()
+    const ready = createDeferred<boolean>()
+    const executeSearch = vi.fn(async (_execution: ExecuteSearchOptions) => [
+      createResult('unexpected'),
+    ])
+    const performSearch = createPerformSearchAction(options, {
+      ensurePreconditions: () => ready.promise,
+      executeSearch,
+    })
+
+    options.searchText.value = 'old source'
+    const run = performSearch()
+    options.sourceIntentGeneration.value += 1
+    ready.resolve(true)
+    await run
+
+    expect(executeSearch).not.toHaveBeenCalled()
+    expect(options.searchResults.value).toEqual([])
     expect(options.isSearching.value).toBe(false)
   })
 })

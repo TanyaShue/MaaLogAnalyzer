@@ -15,6 +15,7 @@ export const createEnsureLoadedTargetReadyAction = (
       fileName: options.fileName,
       fileContent: options.fileContent,
       fileHandle: options.fileHandle,
+      selectLoadedTarget: options.prepareLoadedTarget,
       applyLoadedTarget,
     })
   }

@@ -17,6 +17,7 @@ export const buildSourceReadyOptions = (
   fileName: options.fileName,
   fileContent: options.fileContent,
   fileHandle: options.fileHandle,
+  prepareSourceMode: options.prepareSourceMode,
   loadedTargets: options.loadedTargets,
   ensureDeferredLoadedTargetsReady: options.ensureDeferredLoadedTargetsReady,
   ensureLoadedTargetReady: options.ensureLoadedTargetReady,

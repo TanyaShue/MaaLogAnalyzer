@@ -12,7 +12,6 @@ interface ApplyLoadedTargetState {
   showFileContent: Ref<boolean>
   contentKey: Ref<number>
   isLoadingFile: Ref<boolean>
-  resetSearchResultsOnly: () => void
   shouldApply?: () => boolean
 }
 
@@ -27,7 +26,6 @@ export const applyLoadedTargetToState = async (
     const metrics = await analyzeTextContent(content)
     if (state.shouldApply && !state.shouldApply()) return
 
-    state.resetSearchResultsOnly()
     state.fileName.value = target.fileName || target.label
     state.fileContent.value = content
     state.fileSizeInMB.value = metrics.byteLength / 1024 / 1024

@@ -9,6 +9,8 @@ export const useTextSearchFileState = () => {
   const totalLines = ref(0)
   const contextLines = ref<string[]>([])
   const contextStartLine = ref(0)
+  const sourceLoadGeneration = ref(0)
+  const sourceIntentGeneration = ref(0)
 
   return {
     fileContent,
@@ -19,5 +21,7 @@ export const useTextSearchFileState = () => {
     totalLines,
     contextLines,
     contextStartLine,
+    sourceLoadGeneration,
+    sourceIntentGeneration,
   }
 }

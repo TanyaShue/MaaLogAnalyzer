@@ -2,7 +2,10 @@ import { nextTick } from 'vue'
 import type { ClearRuntimeContentOptions } from './types'
 
 export const clearRuntimeContent = (options: ClearRuntimeContentOptions) => {
+  options.sourceLoadGeneration.value += 1
+  options.sourceIntentGeneration.value += 1
   options.searchRequestGeneration.value += 1
+  options.isLoadingFile.value = false
   options.isSearching.value = false
 
   options.contentKey.value++
@@ -19,10 +22,10 @@ export const clearRuntimeContent = (options: ClearRuntimeContentOptions) => {
   options.fileSizeInMB.value = 0
   options.contextLines.value = []
   options.contextStartLine.value = 0
+  options.fileContent.value = ''
+  options.fileName.value = ''
 
   nextTick(() => {
-    options.fileContent.value = ''
-    options.fileName.value = ''
     options.topToolbarRef.value?.resetFileInput()
 
     if (typeof window !== 'undefined' && 'gc' in window) {

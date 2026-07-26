@@ -5,6 +5,7 @@ import type { LoadedSourceSyncOptions } from './optionTypes'
 export const setupLoadedTargetModeSync = (options: LoadedSourceSyncOptions) => {
   watch(options.sourceMode, async (mode) => {
     if (mode !== 'loaded') return
+    const sourceGeneration = options.sourceLoadGeneration.value
     if (
       (options.loadedTargets.value?.length ?? 0) === 0
       && options.hasDeferredLoadedTargets.value
@@ -13,9 +14,14 @@ export const setupLoadedTargetModeSync = (options: LoadedSourceSyncOptions) => {
       await options.ensureLoadedTargets.value()
       await nextTick()
     }
+    if (
+      options.sourceMode.value !== 'loaded' ||
+      options.sourceLoadGeneration.value !== sourceGeneration
+    ) return
+
     const targets = options.loadedTargets.value ?? []
     if (targets.length === 0) {
-      options.sourceMode.value = 'manual'
+      options.prepareSourceMode('manual')
       return
     }
     const nextId = resolveActiveLoadedTargetId(
@@ -25,7 +31,7 @@ export const setupLoadedTargetModeSync = (options: LoadedSourceSyncOptions) => {
     )
     if (!nextId) return
     if (options.selectedLoadedTargetId.value !== nextId) {
-      options.selectedLoadedTargetId.value = nextId
+      options.prepareLoadedTarget(nextId)
     } else {
       await options.applyLoadedTarget(targets.find(item => item.id === nextId))
     }

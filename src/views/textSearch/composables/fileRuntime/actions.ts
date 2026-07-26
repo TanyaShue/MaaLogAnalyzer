@@ -10,7 +10,15 @@ import {
   buildLoadContextLinesOptions,
 } from './optionBuilders'
 
-export const createFileRuntimeActions = (options: TextSearchFileRuntimeOptions) => {
+export const createFileRuntimeActions = (
+  options: TextSearchFileRuntimeOptions,
+  dependencies: {
+    loadContextLines?: typeof loadContextLinesForRuntime
+  } = {},
+) => {
+  let contextRequestId = 0
+  const loadContext = dependencies.loadContextLines ?? loadContextLinesForRuntime
+
   const handleFileUpload = async (event: Event) => {
     await handleRuntimeFileUpload(buildHandleFileUploadOptions(options), event)
   }
@@ -20,7 +28,12 @@ export const createFileRuntimeActions = (options: TextSearchFileRuntimeOptions) 
   }
 
   const loadContextLines = async (targetLine: number) => {
-    await loadContextLinesForRuntime(buildLoadContextLinesOptions(options), targetLine)
+    const requestId = ++contextRequestId
+    await loadContext(
+      buildLoadContextLinesOptions(options),
+      targetLine,
+      { shouldApply: () => requestId === contextRequestId },
+    )
   }
 
   const jumpToLine = async (lineNumber: number) => {

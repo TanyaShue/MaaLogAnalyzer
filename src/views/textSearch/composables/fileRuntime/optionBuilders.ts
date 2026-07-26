@@ -10,7 +10,10 @@ export const buildHandleFileUploadOptions = (
   options: TextSearchFileRuntimeOptions,
 ): HandleRuntimeFileUploadOptions => ({
   sourceMode: options.sourceMode,
+  sourceLoadGeneration: options.sourceLoadGeneration,
+  sourceIntentGeneration: options.sourceIntentGeneration,
   isLoadingFile: options.isLoadingFile,
+  resetSearchResultsOnly: options.resetSearchResultsOnly,
   fileName: options.fileName,
   fileSizeInMB: options.fileSizeInMB,
   isLargeFile: options.isLargeFile,
@@ -22,7 +25,10 @@ export const buildHandleFileUploadOptions = (
 export const buildClearRuntimeOptions = (
   options: TextSearchFileRuntimeOptions,
 ): ClearRuntimeContentOptions => ({
+  sourceLoadGeneration: options.sourceLoadGeneration,
+  sourceIntentGeneration: options.sourceIntentGeneration,
   searchRequestGeneration: options.searchRequestGeneration,
+  isLoadingFile: options.isLoadingFile,
   isSearching: options.isSearching,
   contentKey: options.contentKey,
   showFileContent: options.showFileContent,
@@ -44,6 +50,7 @@ export const buildClearRuntimeOptions = (
 export const buildLoadContextLinesOptions = (
   options: TextSearchFileRuntimeOptions,
 ): LoadContextLinesOptions => ({
+  sourceLoadGeneration: options.sourceLoadGeneration,
   fileHandle: options.fileHandle,
   fileContent: options.fileContent,
   totalLines: options.totalLines,

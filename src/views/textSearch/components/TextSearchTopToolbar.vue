@@ -27,6 +27,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'file-upload': [event: Event]
+  'begin-file-selection': []
   'clear-content': []
   'update:sourceMode': [value: SourceMode]
   'update:selectedLoadedTargetId': [value: string]
@@ -41,7 +42,7 @@ const emit = defineEmits<{
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const handleSelectFile = () => {
-  emit('update:sourceMode', 'manual')
+  emit('begin-file-selection')
   fileInputRef.value?.click()
 }
 
