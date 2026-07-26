@@ -3,9 +3,12 @@ import { resolveArchiveLimits } from '../archiveLimits'
 import {
   BrowserInputLimitError,
   chargeBrowserInputFile,
+  chargeInputResourceBytes,
   createBrowserInputBudget,
+  createInputResourceBudget,
   registerBrowserInputEntry,
   registerBrowserInputFile,
+  registerInputResourceEntry,
 } from '../browserInputBudget'
 import { collectTextFilesFromFiles } from '../../views/process/utils/fileLoadingHelpers'
 
@@ -27,6 +30,17 @@ describe('browser input resource budgets', () => {
     const budget = createBrowserInputBudget()
     expect(() => registerBrowserInputEntry(budget, 'deep/path', 65))
       .toThrow(BrowserInputLimitError)
+  })
+
+  it('deduplicates repeated native path scans while sharing byte totals', () => {
+    const budget = createInputResourceBudget()
+    registerInputResourceEntry(budget, 'C:/logs/debug/maa.log', 2)
+    registerInputResourceEntry(budget, 'C:\\logs\\debug\\maa.log', 2)
+    chargeInputResourceBytes(budget, 10)
+    chargeInputResourceBytes(budget, 20)
+
+    expect(budget.entryCount).toBe(1)
+    expect(budget.selectedBytes).toBe(30)
   })
 
   it('rejects oversized selected files and aggregate selected bytes', () => {

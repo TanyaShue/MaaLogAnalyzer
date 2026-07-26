@@ -10,6 +10,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { joinNativePath } from './nativePath'
 import { replaceBlobUrl } from './blobUrlMap'
 import { releaseTauriArchiveResource } from './tauriArchiveResources'
+import { ArchiveLimitError } from './archiveLimits'
+import {
+  InputResourceLimitError,
+  chargeInputResourceBytes,
+  createInputResourceBudget,
+  registerInputResourceEntry,
+  type InputResourceBudget,
+} from './browserInputBudget'
 import {
   combineLoadedPrimaryLogSegments,
   createPrimaryLogSelectionOptions,
@@ -58,8 +66,35 @@ const isTextSearchFileName = (name: string) => {
 }
 
 const shouldSkipCollectedTextFile = (name: string) => isPrimaryLogFileName(name)
-
 const toPosixPath = (value: string) => value.replace(/\\/g, '/')
+
+const isInputResourceLimitError = (error: unknown) => (
+  error instanceof ArchiveLimitError || error instanceof InputResourceLimitError
+)
+
+export const chargeTauriRegularFile = async (
+  path: string,
+  budget: InputResourceBudget,
+  options: { image?: boolean } = {},
+) => {
+  const normalizedPath = toPosixPath(path)
+  if (budget.chargedPaths.has(normalizedPath)) return
+  const { lstat } = await import('@tauri-apps/plugin-fs')
+  const info = await lstat(path)
+  if (!info.isFile || info.isSymlink) {
+    throw new InputResourceLimitError('所选目录包含不受支持的文件链接')
+  }
+  chargeInputResourceBytes(budget, info.size, options)
+  budget.chargedPaths.add(normalizedPath)
+}
+
+export const assertTauriDirectory = async (path: string) => {
+  const { lstat } = await import('@tauri-apps/plugin-fs')
+  const info = await lstat(path)
+  if (!info.isDirectory || info.isSymlink) {
+    throw new InputResourceLimitError('所选目录包含不受支持的目录链接')
+  }
+}
 
 const normalizeLoadedPath = (rawPath: string, rootPath?: string) => {
   let normalized = toPosixPath(rawPath)
@@ -122,6 +157,9 @@ async function openLogFileWithTauri(): Promise<string | null> {
       if (lower.endsWith('.zip') || lower.endsWith('.7z') || lower.endsWith('.rar')) {
         return await openArchiveFileWithTauri(anchor, selectedPaths)
       }
+      const budget = createInputResourceBudget()
+      registerInputResourceEntry(budget, anchor, 0)
+      await chargeTauriRegularFile(anchor, budget)
       const { readFile } = await import('@tauri-apps/plugin-fs')
       const bytes = await readFile(anchor)
       const content = decodeFileContent(bytes)
@@ -241,25 +279,36 @@ export async function getAppInfo(): Promise<{ version: string; tauriVersion: str
 /**
  * 递归查找debug文件夹
  */
-async function findDebugFolder(basePath: string): Promise<string | null> {
+async function findDebugFolder(
+  basePath: string,
+  budget: InputResourceBudget,
+  depth = 0,
+): Promise<string | null> {
   try {
     const { readDir, exists } = await import('@tauri-apps/plugin-fs')
+    registerInputResourceEntry(budget, basePath, depth)
+    await assertTauriDirectory(basePath)
 
     // 检查当前路径下是否有debug文件夹
     const debugPath = joinNativePath(basePath, 'debug')
     if (await exists(debugPath)) {
+      registerInputResourceEntry(budget, debugPath, depth + 1)
+      await assertTauriDirectory(debugPath)
       return debugPath
     }
 
     // 递归查找子文件夹
     const entries = await readDir(basePath)
     for (const entry of entries) {
-      if (entry.isDirectory) {
-        const found = await findDebugFolder(joinNativePath(basePath, entry.name))
+      const fullPath = joinNativePath(basePath, entry.name)
+      registerInputResourceEntry(budget, fullPath, depth + 1)
+      if (entry.isDirectory && !entry.isSymlink) {
+        const found = await findDebugFolder(fullPath, budget, depth + 1)
         if (found) return found
       }
     }
   } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     console.error('[查找debug] 错误:', error)
   }
   return null
@@ -268,7 +317,10 @@ async function findDebugFolder(basePath: string): Promise<string | null> {
 /**
  * 读取on_error文件夹中的截图
  */
-async function readErrorImages(debugPath: string): Promise<Map<string, string>> {
+async function readErrorImages(
+  debugPath: string,
+  budget: InputResourceBudget,
+): Promise<Map<string, string>> {
   const imageMap = new Map<string, string>()
   try {
     const { readDir, exists } = await import('@tauri-apps/plugin-fs')
@@ -279,10 +331,14 @@ async function readErrorImages(debugPath: string): Promise<Map<string, string>> 
       return imageMap
     }
 
+    registerInputResourceEntry(budget, onErrorPath, 1)
+    await assertTauriDirectory(onErrorPath)
     const entries = await readDir(onErrorPath)
 
     for (const entry of entries) {
-      if (!entry.isDirectory && entry.name.endsWith('.png')) {
+      const fullPath = joinNativePath(onErrorPath, entry.name)
+      registerInputResourceEntry(budget, fullPath, 2)
+      if (entry.isFile && !entry.isSymlink && entry.name.endsWith('.png')) {
         // 解析文件名: 2026.03.08-13.12.30.216_CCUpdate.png (毫秒可能是1-3位)
         const match = entry.name.match(/^(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2})\.(\d{1,3})_(.+)\.png$/)
         if (match) {
@@ -290,13 +346,14 @@ async function readErrorImages(debugPath: string): Promise<Map<string, string>> 
           // 将毫秒补齐为3位
           const paddedMs = ms.padEnd(3, '0')
           const key = `${timestamp}.${paddedMs}_${nodeName}`
-          const fullPath = joinNativePath(onErrorPath, entry.name)
+          await chargeTauriRegularFile(fullPath, budget, { image: true })
           imageMap.set(key, fullPath)
         }
       }
     }
 
   } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     console.warn('[截图] 读取截图失败:', error)
   }
   return imageMap
@@ -320,7 +377,10 @@ function parseVisionImageKey(fileName: string): string | null {
 /**
  * 读取 vision 文件夹中的调试截图（Tauri）
  */
-async function readVisionImages(debugPath: string): Promise<Map<string, string>> {
+async function readVisionImages(
+  debugPath: string,
+  budget: InputResourceBudget,
+): Promise<Map<string, string>> {
   const imageMap = new Map<string, string>()
   try {
     const { readDir, exists } = await import('@tauri-apps/plugin-fs')
@@ -330,48 +390,61 @@ async function readVisionImages(debugPath: string): Promise<Map<string, string>>
       return imageMap
     }
 
+    registerInputResourceEntry(budget, visionPath, 1)
+    await assertTauriDirectory(visionPath)
     const entries = await readDir(visionPath)
     for (const entry of entries) {
-      if (!entry.isDirectory && entry.name.toLowerCase().endsWith('.jpg')) {
+      const fullPath = joinNativePath(visionPath, entry.name)
+      registerInputResourceEntry(budget, fullPath, 2)
+      if (entry.isFile && !entry.isSymlink && entry.name.toLowerCase().endsWith('.jpg')) {
         const key = parseVisionImageKey(entry.name)
         if (key != null) {
-          const fullPath = joinNativePath(visionPath, entry.name)
+          await chargeTauriRegularFile(fullPath, budget, { image: true })
           // 同一 key 覆盖（取最后出现的文件）
           imageMap.set(key, fullPath)
         }
       }
     }
   } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     console.warn('[vision] 读取调试截图失败:', error)
   }
   return imageMap
 }
 
 
-async function collectTextFilesTauri(rootPath: string): Promise<LoadedTextFile[]> {
+async function collectTextFilesTauri(
+  rootPath: string,
+  budget: InputResourceBudget,
+): Promise<LoadedTextFile[]> {
   const result: LoadedTextFile[] = []
   const seen = new Set<string>()
   const { readDir, readTextFile } = await import('@tauri-apps/plugin-fs')
 
-  const walk = async (dirPath: string) => {
+  const walk = async (dirPath: string, depth: number) => {
+    registerInputResourceEntry(budget, dirPath, depth)
+    await assertTauriDirectory(dirPath)
     const entries = await readDir(dirPath)
     for (const entry of entries) {
       const fullPath = joinNativePath(dirPath, entry.name)
-      if (entry.isDirectory) {
-        await walk(fullPath)
+      registerInputResourceEntry(budget, fullPath, depth + 1)
+      if (entry.isDirectory && !entry.isSymlink) {
+        await walk(fullPath, depth + 1)
         continue
       }
+      if (!entry.isFile || entry.isSymlink) continue
       if (!isTextSearchFileName(entry.name)) continue
       if (shouldSkipCollectedTextFile(entry.name)) continue
       const path = normalizeLoadedPath(fullPath, rootPath) || entry.name
       if (seen.has(path)) continue
       seen.add(path)
+      await chargeTauriRegularFile(fullPath, budget)
       const content = await readTextFile(fullPath)
       result.push({ path, name: entry.name, content })
     }
   }
 
-  await walk(rootPath)
+  await walk(rootPath, 0)
   return result
 }
 
@@ -401,27 +474,35 @@ async function collectTextFilesWeb(rootHandle: FileSystemDirectoryHandle): Promi
   return result
 }
 
-async function listPrimaryLogFilesTauri(dirPath: string): Promise<Array<{ path: string; name: string }>> {
+async function listPrimaryLogFilesTauri(
+  dirPath: string,
+  budget: InputResourceBudget,
+): Promise<Array<{ path: string; name: string }>> {
   const { readDir } = await import('@tauri-apps/plugin-fs')
+  await assertTauriDirectory(dirPath)
   const entries = await readDir(dirPath)
+  for (const entry of entries) {
+    registerInputResourceEntry(budget, joinNativePath(dirPath, entry.name), 1)
+  }
   return entries
-    .filter(entry => !entry.isDirectory && !!entry.name && isPrimaryLogFileName(entry.name))
+    .filter(entry => entry.isFile && !entry.isSymlink && !!entry.name && isPrimaryLogFileName(entry.name))
     .map(entry => ({
       path: joinNativePath(dirPath, entry.name),
       name: entry.name!,
     }))
 }
 
-async function hasPrimaryLogInTauri(dirPath: string): Promise<boolean> {
-  return (await listPrimaryLogFilesTauri(dirPath)).length > 0
+async function hasPrimaryLogInTauri(dirPath: string, budget: InputResourceBudget): Promise<boolean> {
+  return (await listPrimaryLogFilesTauri(dirPath, budget)).length > 0
 }
 
 async function readPrimaryLogFilesTauri(
   dirPath: string,
+  budget: InputResourceBudget,
   selectPrimaryLogs?: OpenFolderDialogOptions['selectPrimaryLogs'],
 ): Promise<LoadedPrimaryLogFile[] | null> {
   const { readTextFile } = await import('@tauri-apps/plugin-fs')
-  const selectedLogs = selectPrimaryLogGroup(await listPrimaryLogFilesTauri(dirPath))
+  const selectedLogs = selectPrimaryLogGroup(await listPrimaryLogFilesTauri(dirPath, budget))
   if (selectedLogs.length === 0) return []
   const selectedOptions = selectPrimaryLogs
     ? await selectPrimaryLogs(createPrimaryLogSelectionOptions(selectedLogs.map(({ item }) => item)))
@@ -430,13 +511,15 @@ async function readPrimaryLogFilesTauri(
   if (selectedOptions.length === 0) return []
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
 
-  const loadedLogs = await Promise.all(selectedLogs
-    .filter(({ item }) => selectedPaths.has(item.path))
-    .map(async ({ item }) => ({
-      path: item.path,
-      name: item.name,
-      content: await readTextFile(item.path),
-    })))
+  const selectedLogItems = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+  for (const { item } of selectedLogItems) {
+    await chargeTauriRegularFile(item.path, budget)
+  }
+  const loadedLogs = await Promise.all(selectedLogItems.map(async ({ item }) => ({
+    path: item.path,
+    name: item.name,
+    content: await readTextFile(item.path),
+  })))
 
   return sortLoadedPrimaryLogSegments(loadedLogs)
 }
@@ -517,14 +600,17 @@ async function openFolderDialogTauri(options: OpenFolderDialogOptions): Promise<
       return null
     }
 
+    const budget = createInputResourceBudget()
+    registerInputResourceEntry(budget, selected, 0)
+    await assertTauriDirectory(selected)
     let debugPath = selected
 
-    if (!(await hasPrimaryLogInTauri(debugPath))) {
+    if (!(await hasPrimaryLogInTauri(debugPath, budget))) {
       debugPath = joinNativePath(selected, 'debug')
 
-      if (!(await exists(debugPath)) || !(await hasPrimaryLogInTauri(debugPath))) {
-        const found = await findDebugFolder(selected)
-        if (!found || !(await hasPrimaryLogInTauri(found))) {
+      if (!(await exists(debugPath)) || !(await hasPrimaryLogInTauri(debugPath, budget))) {
+        const found = await findDebugFolder(selected, budget)
+        if (!found || !(await hasPrimaryLogInTauri(found, budget))) {
           toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
           return null
         }
@@ -532,7 +618,7 @@ async function openFolderDialogTauri(options: OpenFolderDialogOptions): Promise<
       }
     }
 
-    const primaryLogFiles = await readPrimaryLogFilesTauri(debugPath, options.selectPrimaryLogs)
+    const primaryLogFiles = await readPrimaryLogFilesTauri(debugPath, budget, options.selectPrimaryLogs)
 
     if (primaryLogFiles == null) {
       return null
@@ -544,13 +630,14 @@ async function openFolderDialogTauri(options: OpenFolderDialogOptions): Promise<
     }
 
 
-    const errorImages = await readErrorImages(debugPath)
-    const visionImages = await readVisionImages(debugPath)
-    const waitFreezesImages = await readWaitFreezesImages(debugPath)
+    const errorImages = await readErrorImages(debugPath, budget)
+    const visionImages = await readVisionImages(debugPath, budget)
+    const waitFreezesImages = await readWaitFreezesImages(debugPath, budget)
     let textFiles: LoadedTextFile[] = []
     try {
-      textFiles = await collectTextFilesTauri(debugPath)
+      textFiles = await collectTextFilesTauri(debugPath, budget)
     } catch (error) {
+      if (isInputResourceLimitError(error)) throw error
       console.warn('[文件夹] 收集文本文件失败(Tauri):', error)
     }
 
@@ -577,7 +664,10 @@ function parseWaitFreezesKey(fileName: string): string | null {
 /**
  * 读取 vision 文件夹中的 wait_freezes 调试截图（Tauri）
  */
-async function readWaitFreezesImages(debugPath: string): Promise<Map<string, string>> {
+async function readWaitFreezesImages(
+  debugPath: string,
+  budget: InputResourceBudget,
+): Promise<Map<string, string>> {
   const imageMap = new Map<string, string>()
   try {
     const { readDir, exists } = await import('@tauri-apps/plugin-fs')
@@ -587,17 +677,22 @@ async function readWaitFreezesImages(debugPath: string): Promise<Map<string, str
       return imageMap
     }
 
+    registerInputResourceEntry(budget, visionPath, 1)
+    await assertTauriDirectory(visionPath)
     const entries = await readDir(visionPath)
     for (const entry of entries) {
-      if (!entry.isDirectory && entry.name.toLowerCase().endsWith('.jpg')) {
+      const fullPath = joinNativePath(visionPath, entry.name)
+      registerInputResourceEntry(budget, fullPath, 2)
+      if (entry.isFile && !entry.isSymlink && entry.name.toLowerCase().endsWith('.jpg')) {
         const key = parseWaitFreezesKey(entry.name)
         if (key != null) {
-          const fullPath = joinNativePath(visionPath, entry.name)
+          await chargeTauriRegularFile(fullPath, budget, { image: true })
           imageMap.set(key, fullPath)
         }
       }
     }
   } catch (error) {
+    if (isInputResourceLimitError(error)) throw error
     console.warn('[wait_freezes] 读取调试截图失败:', error)
   }
   return imageMap

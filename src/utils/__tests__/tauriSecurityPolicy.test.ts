@@ -39,6 +39,7 @@ describe('Tauri security policy', () => {
 
     expect(capability.permissions).not.toContain('fs:read-all')
     expect(capability.permissions).not.toContain('fs:write-all')
+    expect(capability.permissions).toContain('fs:allow-lstat')
     expect(capability.permissions.every(permission => typeof permission === 'string')).toBe(true)
     expect(rustEntry).toContain('app.fs_scope().is_allowed')
     expect(rustEntry).toContain('app.asset_protocol_scope()')
@@ -46,5 +47,9 @@ describe('Tauri security policy', () => {
     expect(rustEntry).toContain('resource_token: Option<String>')
     expect(rustEntry).not.toContain('.forbid_directory(')
     expect(fileDialog).toMatch(/directory:\s*true,\s*recursive:\s*true,/)
+    expect(fileDialog).toContain('createInputResourceBudget')
+    expect(fileDialog).toContain('chargeTauriRegularFile')
+    expect(fileDialog).toContain("import('@tauri-apps/plugin-fs')")
+    expect(fileDialog).toContain('lstat(path)')
   })
 })

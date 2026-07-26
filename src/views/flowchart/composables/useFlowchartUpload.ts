@@ -3,7 +3,7 @@ import { toastWarning } from '../../../utils/toast'
 import { isTauri } from '../../../utils/platform'
 import { decodeFileContent } from '../../../utils/textEncoding'
 import { replaceBlobUrl } from '../../../utils/blobUrlMap'
-import { normalizeTauriDialogPaths } from '../../../utils/fileDialog'
+import { chargeTauriRegularFile, normalizeTauriDialogPaths } from '../../../utils/fileDialog'
 import {
   collectTextFilesFromFiles,
   type LoadedTextFile,
@@ -25,7 +25,9 @@ import {
 import {
   chargeBrowserInputFile,
   createBrowserInputBudget,
+  createInputResourceBudget,
   registerBrowserInputFile,
+  registerInputResourceEntry,
   type BrowserInputBudget,
 } from '../../../utils/browserInputBudget'
 
@@ -192,6 +194,9 @@ export const useFlowchartUpload = ({
           )
         } else {
           const { readFile } = await import('@tauri-apps/plugin-fs')
+          const budget = createInputResourceBudget()
+          registerInputResourceEntry(budget, path, 0)
+          await chargeTauriRegularFile(path, budget)
           const content = decodeFileContent(await readFile(path))
           await archiveResourceOwner.release()
           onUploadContent(content)

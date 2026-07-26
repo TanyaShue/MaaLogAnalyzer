@@ -2,7 +2,7 @@ import type { UseProcessFileLoaderOptions } from './types'
 import { toastError } from '../../../../utils/toast'
 import { invoke } from '@tauri-apps/api/core'
 import { decodeFileContent } from '../../../../utils/textEncoding'
-import { normalizeTauriDialogPaths } from '../../../../utils/fileDialog'
+import { chargeTauriRegularFile, normalizeTauriDialogPaths } from '../../../../utils/fileDialog'
 import {
   createPrimaryLogSelectionOptions,
   sortLoadedPrimaryLogSegments,
@@ -12,6 +12,10 @@ import {
   releaseTauriArchiveResource,
   type TauriArchiveResourceOwner,
 } from '../../../../utils/tauriArchiveResources'
+import {
+  createInputResourceBudget,
+  registerInputResourceEntry,
+} from '../../../../utils/browserInputBudget'
 
 const createTauriImageMap = (entries: Record<string, string>) => {
   const result = new Map<string, string>()
@@ -90,6 +94,9 @@ export const useTauriBridge = (
             }
           } else {
             const { readFile } = await import('@tauri-apps/plugin-fs')
+            const budget = createInputResourceBudget()
+            registerInputResourceEntry(budget, anchor, 0)
+            await chargeTauriRegularFile(anchor, budget)
             const content = decodeFileContent(await readFile(anchor))
 
             if (content) {
