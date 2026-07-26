@@ -23,6 +23,7 @@ export type {
   RawLineQueryOptions,
 } from '../raw/store'
 export { AnalyzerSessionStore, createAnalyzerSessionStore } from '../service/sessionStore'
+export type { AnalyzerSessionStoreOptions } from '../service/sessionStore'
 export { buildEvidence, buildLineEvidence } from '../service/evidenceBuilders'
 export { createAnalyzerToolHandlers } from '../service/toolHandlers'
 export { projectTasksFromTrace } from '../projector/taskProjector'
