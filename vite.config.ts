@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { readFileSync } from 'node:fs'
+import { resolveUmamiWebsiteId, UMAMI_SCRIPT_SRC } from './scripts/umami-analytics.mjs'
 
 const isTauriDev = Boolean(process.env.TAURI_ENV_PLATFORM || process.env.TAURI_DEV_HOST)
 const { version: appVersion } = JSON.parse(
@@ -19,6 +20,23 @@ export default defineConfig({
           fileName: 'version.json',
           source: JSON.stringify({ version: appVersion }) + '\n',
         })
+      },
+    },
+    // 仅在浏览器构建注入 Umami 统计脚本，index.html 本身保持无远程脚本
+    {
+      name: 'inject-umami-analytics',
+      transformIndexHtml() {
+        const websiteId = resolveUmamiWebsiteId(process.env)
+        if (!websiteId) return []
+        return [{
+          tag: 'script',
+          injectTo: 'head' as const,
+          attrs: {
+            async: true,
+            src: UMAMI_SCRIPT_SRC,
+            'data-website-id': websiteId,
+          },
+        }]
       },
     },
     // 自定义插件：强制忽略 "pkgs copy" 目录下的模块
