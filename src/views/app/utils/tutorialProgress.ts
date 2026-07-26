@@ -87,7 +87,11 @@ export function markCurrentTutorialVersionCompleted(
 
     localStorage.setItem(storageKey, JSON.stringify(obj))
   } catch {
-    localStorage.setItem(storageKey, String(tourVersion))
+    try {
+      localStorage.setItem(storageKey, String(tourVersion))
+    } catch {
+      // Storage can be disabled or full; tutorial completion must remain non-fatal.
+    }
   }
 }
 
