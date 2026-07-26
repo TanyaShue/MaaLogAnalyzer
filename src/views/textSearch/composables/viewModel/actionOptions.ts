@@ -24,7 +24,7 @@ export const buildSearchExecutorOptions = (
   searchResults: context.searchResults,
   totalMatches: context.totalMatches,
   addToHistory: context.addToHistory,
-  abortSearch: context.abortSearch,
+  searchRequestGeneration: context.searchRequestGeneration,
 })
 
 export const buildFileRuntimeOptions = (
@@ -33,7 +33,7 @@ export const buildFileRuntimeOptions = (
   sourceMode: context.sourceMode,
   isLoadingFile: context.isLoadingFile,
   isSearching: context.isSearching,
-  abortSearch: context.abortSearch,
+  searchRequestGeneration: context.searchRequestGeneration,
   searchText: context.searchText,
   fileName: context.fileName,
   fileContent: context.fileContent,

@@ -22,7 +22,7 @@ export const buildHandleFileUploadOptions = (
 export const buildClearRuntimeOptions = (
   options: TextSearchFileRuntimeOptions,
 ): ClearRuntimeContentOptions => ({
-  abortSearch: options.abortSearch,
+  searchRequestGeneration: options.searchRequestGeneration,
   isSearching: options.isSearching,
   contentKey: options.contentKey,
   showFileContent: options.showFileContent,

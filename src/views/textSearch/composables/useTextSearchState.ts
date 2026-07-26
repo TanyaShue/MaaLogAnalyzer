@@ -10,7 +10,7 @@ export const useTextSearchState = () => {
   const searchState = useTextSearchSearchState()
 
   const resetSearchResultsOnly = () => {
-    searchState.abortSearch.value = true
+    searchState.searchRequestGeneration.value += 1
     searchState.isSearching.value = false
     searchState.searchResults.value = []
     searchState.totalMatches.value = 0

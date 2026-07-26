@@ -10,7 +10,10 @@ import type { TextSearchSearchExecutorOptions } from './executorTypes'
 
 export const ensureSearchPreconditions = async (
   options: TextSearchSearchExecutorOptions,
+  isCurrentInvocation: () => boolean = () => true,
 ): Promise<boolean> => {
+  if (!isCurrentInvocation()) return false
+
   if (!options.searchText.value) {
     clearSearchResultState(buildSearchResultState(options))
     return false
@@ -21,6 +24,8 @@ export const ensureSearchPreconditions = async (
   }
 
   const sourceReady = await ensureSearchSourceReady(buildSourceReadyOptions(options))
+  if (!isCurrentInvocation()) return false
+
   if (!sourceReady) {
     showSourceNotReadyMessage(options.sourceMode.value)
     return false

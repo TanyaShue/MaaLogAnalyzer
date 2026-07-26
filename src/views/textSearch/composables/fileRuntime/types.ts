@@ -6,7 +6,7 @@ export interface TextSearchFileRuntimeOptions {
   sourceMode: Ref<SourceMode>
   isLoadingFile: Ref<boolean>
   isSearching: Ref<boolean>
-  abortSearch: Ref<boolean>
+  searchRequestGeneration: Ref<number>
   searchText: Ref<string>
   fileName: Ref<string>
   fileContent: Ref<string>
@@ -38,7 +38,7 @@ export interface HandleRuntimeFileUploadOptions {
 }
 
 export interface ClearRuntimeContentOptions {
-  abortSearch: Ref<boolean>
+  searchRequestGeneration: Ref<number>
   isSearching: Ref<boolean>
   contentKey: Ref<number>
   showFileContent: Ref<boolean>

@@ -2,7 +2,7 @@ import { nextTick } from 'vue'
 import type { ClearRuntimeContentOptions } from './types'
 
 export const clearRuntimeContent = (options: ClearRuntimeContentOptions) => {
-  options.abortSearch.value = true
+  options.searchRequestGeneration.value += 1
   options.isSearching.value = false
 
   options.contentKey.value++

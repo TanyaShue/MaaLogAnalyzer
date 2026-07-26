@@ -20,5 +20,19 @@ export interface TextSearchSearchExecutorOptions {
   searchResults: Ref<SearchResult[]>
   totalMatches: Ref<number>
   addToHistory: (text: string) => void
-  abortSearch: Ref<boolean>
+  searchRequestGeneration: Ref<number>
+}
+
+export interface TextSearchExecutionSnapshot {
+  fileContent: string
+  fileHandle: File | null
+  isLargeFile: boolean
+  keyword: string
+  useRegex: boolean
+  caseSensitive: boolean
+}
+
+export interface ActiveTextSearchRequest {
+  snapshot: TextSearchExecutionSnapshot
+  isCurrent: () => boolean
 }

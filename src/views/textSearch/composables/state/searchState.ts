@@ -5,7 +5,7 @@ export const useTextSearchSearchState = () => {
   const maxResults = 500
   const isSearching = ref(false)
   const isLoadingFile = ref(false)
-  const abortSearch = ref(false)
+  const searchRequestGeneration = ref(0)
   const searchResults = ref<SearchResult[]>([])
   const totalMatches = ref(0)
 
@@ -13,7 +13,7 @@ export const useTextSearchSearchState = () => {
     maxResults,
     isSearching,
     isLoadingFile,
-    abortSearch,
+    searchRequestGeneration,
     searchResults,
     totalMatches,
   }

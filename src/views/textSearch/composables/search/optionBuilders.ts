@@ -1,6 +1,9 @@
 import { executeSearchByMode } from './executeByMode'
 import { ensureSearchSourceReady } from './sourceGuard'
-import type { TextSearchSearchExecutorOptions } from './executorTypes'
+import type {
+  TextSearchExecutionSnapshot,
+  TextSearchSearchExecutorOptions,
+} from './executorTypes'
 
 export const buildSearchResultState = (options: TextSearchSearchExecutorOptions) => ({
   searchResults: options.searchResults,
@@ -21,13 +24,26 @@ export const buildSourceReadyOptions = (
 
 export const buildExecuteByModeOptions = (
   options: TextSearchSearchExecutorOptions,
+  snapshot: TextSearchExecutionSnapshot,
+  shouldAbort: () => boolean,
 ): Parameters<typeof executeSearchByMode>[0] => ({
+  fileContent: snapshot.fileContent,
+  fileHandle: snapshot.fileHandle,
+  isLargeFile: snapshot.isLargeFile,
+  keyword: snapshot.keyword,
+  useRegex: snapshot.useRegex,
+  caseSensitive: snapshot.caseSensitive,
+  maxResults: options.maxResults,
+  shouldAbort,
+})
+
+export const buildSearchExecutionSnapshot = (
+  options: TextSearchSearchExecutorOptions,
+): TextSearchExecutionSnapshot => ({
   fileContent: options.fileContent.value,
   fileHandle: options.fileHandle.value,
   isLargeFile: options.isLargeFile.value,
   keyword: options.searchText.value,
   useRegex: options.useRegex.value,
   caseSensitive: options.caseSensitive.value,
-  maxResults: options.maxResults,
-  shouldAbort: () => options.abortSearch.value,
 })

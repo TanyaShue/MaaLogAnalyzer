@@ -1,0 +1,159 @@
+import { describe, expect, it, vi } from 'vitest'
+import { ref } from 'vue'
+import { createPerformSearchAction } from '../performSearchAction'
+import { executeSearchByMode } from '../executeByMode'
+import type { TextSearchSearchExecutorOptions } from '../executorTypes'
+import type { LoadedSearchTarget, SearchResult } from '../../types'
+import type { SourceMode } from '../../loadedSource/types'
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason: unknown) => void
+}
+
+type ExecuteSearchOptions = Parameters<typeof executeSearchByMode>[0]
+
+const createDeferred = <T>(): Deferred<T> => {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+const createResult = (line: string): SearchResult => ({
+  lineNumber: 1,
+  line,
+  matchStart: 0,
+  matchEnd: line.length,
+  context: line,
+})
+
+const createOptions = () => {
+  const addToHistory = vi.fn<(text: string) => void>()
+  const options: TextSearchSearchExecutorOptions = {
+    searchText: ref(''),
+    fileName: ref('maa.log'),
+    fileContent: ref('content'),
+    fileHandle: ref<File | null>(null),
+    isLargeFile: ref(false),
+    isLoadingFile: ref(false),
+    isSearching: ref(false),
+    sourceMode: ref<SourceMode>('manual'),
+    loadedTargets: ref<LoadedSearchTarget[] | undefined>(undefined),
+    ensureDeferredLoadedTargetsReady: async () => {},
+    ensureLoadedTargetReady: async () => true,
+    caseSensitive: ref(false),
+    useRegex: ref(false),
+    maxResults: 500,
+    searchResults: ref<SearchResult[]>([]),
+    totalMatches: ref(0),
+    addToHistory,
+    searchRequestGeneration: ref(0),
+  }
+  return { options, addToHistory }
+}
+
+describe('createPerformSearchAction', () => {
+  it('only commits the latest request and keeps its loading state isolated', async () => {
+    const { options, addToHistory } = createOptions()
+    const first = createDeferred<SearchResult[] | null>()
+    const second = createDeferred<SearchResult[] | null>()
+    const executeSearch = vi.fn((execution: ExecuteSearchOptions) => {
+      return execution.keyword === 'first' ? first.promise : second.promise
+    })
+    const performSearch = createPerformSearchAction(options, {
+      ensurePreconditions: async () => true,
+      executeSearch,
+    })
+
+    options.searchText.value = 'first'
+    const firstRun = performSearch()
+    await vi.waitFor(() => expect(executeSearch).toHaveBeenCalledTimes(1))
+
+    options.searchText.value = 'second'
+    const secondRun = performSearch()
+    await vi.waitFor(() => expect(executeSearch).toHaveBeenCalledTimes(2))
+
+    const firstExecution = executeSearch.mock.calls[0]?.[0]
+    expect(firstExecution?.keyword).toBe('first')
+    expect(firstExecution?.shouldAbort()).toBe(true)
+
+    first.resolve([createResult('first result')])
+    await firstRun
+
+    expect(options.searchResults.value).toEqual([])
+    expect(options.isSearching.value).toBe(true)
+    expect(addToHistory).not.toHaveBeenCalled()
+
+    second.resolve([createResult('second result')])
+    await secondRun
+
+    expect(options.searchResults.value).toEqual([createResult('second result')])
+    expect(options.totalMatches.value).toBe(1)
+    expect(options.isSearching.value).toBe(false)
+    expect(addToHistory).toHaveBeenCalledOnce()
+    expect(addToHistory).toHaveBeenCalledWith('second')
+  })
+
+  it('does not let an older precondition completion overtake a newer search', async () => {
+    const { options } = createOptions()
+    const firstReady = createDeferred<boolean>()
+    const secondReady = createDeferred<boolean>()
+    const ensurePreconditions = vi.fn()
+      .mockReturnValueOnce(firstReady.promise)
+      .mockReturnValueOnce(secondReady.promise)
+    const executeSearch = vi.fn(async (_execution: ExecuteSearchOptions) => [
+      createResult('second result'),
+    ])
+    const performSearch = createPerformSearchAction(options, {
+      ensurePreconditions,
+      executeSearch,
+    })
+
+    options.searchText.value = 'first'
+    const firstRun = performSearch()
+    await vi.waitFor(() => expect(ensurePreconditions).toHaveBeenCalledTimes(1))
+
+    options.searchText.value = 'second'
+    const secondRun = performSearch()
+    await vi.waitFor(() => expect(ensurePreconditions).toHaveBeenCalledTimes(2))
+
+    secondReady.resolve(true)
+    await secondRun
+    firstReady.resolve(true)
+    await firstRun
+
+    expect(executeSearch).toHaveBeenCalledTimes(1)
+    expect(executeSearch.mock.calls[0]?.[0].keyword).toBe('second')
+    expect(options.searchResults.value).toEqual([createResult('second result')])
+  })
+
+  it('ignores results and errors after the request generation is invalidated', async () => {
+    const { options, addToHistory } = createOptions()
+    const pending = createDeferred<SearchResult[] | null>()
+    const reportError = vi.fn<(error: unknown) => void>()
+    const performSearch = createPerformSearchAction(options, {
+      ensurePreconditions: async () => true,
+      executeSearch: () => pending.promise,
+      reportError,
+    })
+
+    options.searchText.value = 'stale'
+    const run = performSearch()
+    await vi.waitFor(() => expect(options.isSearching.value).toBe(true))
+
+    options.searchRequestGeneration.value += 1
+    options.isSearching.value = false
+    pending.reject(new Error('stale failure'))
+    await run
+
+    expect(options.searchResults.value).toEqual([])
+    expect(addToHistory).not.toHaveBeenCalled()
+    expect(reportError).not.toHaveBeenCalled()
+    expect(options.isSearching.value).toBe(false)
+  })
+})
