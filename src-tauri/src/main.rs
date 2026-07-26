@@ -1,14 +1,14 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
 use std::cmp::Ordering;
-use std::io::{Read, copy};
+use std::collections::HashMap;
+use std::io::{copy, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(debug_assertions)]
 use tauri::Manager;
+use tauri_plugin_fs::FsExt;
 
 use serde::Serialize;
 
@@ -118,10 +118,14 @@ fn collect_mxu_zip_volume_paths(path: &Path) -> Vec<PathBuf> {
 }
 
 #[tauri::command]
-fn extract_zip_log(path: String) -> Result<ArchiveExtractResult, String> {
+fn extract_zip_log(app: tauri::AppHandle, path: String) -> Result<ArchiveExtractResult, String> {
     let lower = path.to_lowercase();
     if !lower.ends_with(".zip") {
         return Err(format!("Tauri 桌面端目前仅支持 ZIP 格式。7z 和 RAR 请使用 Web 版本。"));
+    }
+
+    if !app.fs_scope().is_allowed(Path::new(&path)) {
+        return Err("ZIP path is not authorized by the file dialog".to_string());
     }
 
     let archive_paths = collect_mxu_zip_volume_paths(Path::new(&path));
@@ -141,6 +145,9 @@ fn extract_zip_log(path: String) -> Result<ArchiveExtractResult, String> {
     }
 
     let temp_dir = create_zip_temp_dir(&path)?;
+    app.asset_protocol_scope()
+        .allow_directory(&temp_dir, false)
+        .map_err(|error| format!("Failed to authorize extracted image directory: {error}"))?;
     let mut temp_seq: u64 = 0;
 
     let selected_logs = select_primary_log_group(&names);

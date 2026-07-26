@@ -31,12 +31,33 @@
   },
   "app": {
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'wasm-unsafe-eval'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", "asset:", "http://asset.localhost", "data:", "blob:"],
+        "font-src": ["'self'", "data:"],
+        "connect-src": ["'self'", "ipc:", "http://ipc.localhost", "asset:", "http://asset.localhost", "data:", "blob:"],
+        "object-src": ["'none'"],
+        "base-uri": ["'none'"],
+        "frame-ancestors": ["'none'"],
+        "form-action": ["'none'"]
+      },
+      "devCsp": {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'wasm-unsafe-eval'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", "asset:", "http://asset.localhost", "data:", "blob:"],
+        "font-src": ["'self'", "data:"],
+        "connect-src": ["'self'", "ws://localhost:5173", "ipc:", "http://ipc.localhost", "asset:", "http://asset.localhost", "data:", "blob:"],
+        "object-src": ["'none'"],
+        "base-uri": ["'none'"],
+        "frame-ancestors": ["'none'"],
+        "form-action": ["'none'"]
+      },
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": []
       }
     },
     "windows": [

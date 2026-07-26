@@ -491,7 +491,8 @@ async function openFolderDialogTauri(options: OpenFolderDialogOptions): Promise<
     const selected = await open({
       multiple: false,
       directory: true,
-      title: '选择日志文件夹'
+      recursive: true,
+      title: '选择日志文件夹',
     })
 
     if (!selected || typeof selected !== 'string') {
