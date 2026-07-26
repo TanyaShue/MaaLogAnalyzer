@@ -53,6 +53,10 @@ jobs:
           pnpm run typecheck:packages
           ./node_modules/.bin/vue-tsc --noEmit
 
+      - name: 代码规范检查
+        if: matrix.platform == 'linux'
+        run: pnpm run lint
+
       - name: 核心回归测试
         if: matrix.platform == 'linux'
         run: pnpm test --pool=threads --maxWorkers=1

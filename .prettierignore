@@ -1,0 +1,10 @@
+dist
+node_modules
+sample
+src-tauri/target
+src-vscode/dist
+src-vscode/webview
+src-vscode/vsix
+packages/*/dist
+pnpm-lock.yaml
+src-vscode/package-lock.json
