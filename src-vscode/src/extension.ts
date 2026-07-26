@@ -2,7 +2,7 @@ import * as vscode from 'vscode'
 import * as path from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { copyFile, mkdir } from 'fs/promises'
+import { copyFile, mkdir, rm } from 'fs/promises'
 import {
   assertExtractedEntriesWithinLimits,
   assertVSCodeIpcEntriesWithinLimits,
@@ -25,6 +25,10 @@ import {
   type ExternalAnalysisRequest,
   type ExternalPathKind,
 } from './externalUriGate'
+import {
+  normalizeEditorUriScheme,
+  WINDOWS_CONTEXT_MENU_KEYS,
+} from './windowsContextMenu'
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined
 const loadOperationCoordinator = new LoadOperationCoordinator()
@@ -307,7 +311,7 @@ export function activate(context: vscode.ExtensionContext) {
   const uninstallContextMenuCommand = vscode.commands.registerCommand(
     'maaLogAnalyzer.uninstallContextMenu',
     async () => {
-      await uninstallWindowsContextMenu()
+      await uninstallWindowsContextMenu(context)
     }
   )
   const sidebarProvider = new SidebarActionProvider()
@@ -955,19 +959,20 @@ async function installWindowsContextMenu(context: vscode.ExtensionContext): Prom
   )
   if (action !== '安装') return
   const entries: Array<{ menuKey: string; arg: string }> = [
-    { menuKey: 'HKCU\\Software\\Classes\\Directory\\shell\\MaaLogAnalyzer', arg: '%1' },
-    { menuKey: 'HKCU\\Software\\Classes\\Directory\\Background\\shell\\MaaLogAnalyzer', arg: '%V' },
-    { menuKey: 'HKCU\\Software\\Classes\\SystemFileAssociations\\.log\\shell\\MaaLogAnalyzer', arg: '%1' },
-    { menuKey: 'HKCU\\Software\\Classes\\SystemFileAssociations\\.zip\\shell\\MaaLogAnalyzer', arg: '%1' },
+    { menuKey: WINDOWS_CONTEXT_MENU_KEYS[0], arg: '%1' },
+    { menuKey: WINDOWS_CONTEXT_MENU_KEYS[1], arg: '%V' },
+    { menuKey: WINDOWS_CONTEXT_MENU_KEYS[2], arg: '%1' },
+    { menuKey: WINDOWS_CONTEXT_MENU_KEYS[3], arg: '%1' },
   ]
 
   try {
     const wscriptExe = (process.env.WINDIR || 'C:\\Windows') + '\\System32\\wscript.exe'
     const { helperScript, iconPath } = await prepareContextMenuAssets(context)
+    const uriScheme = normalizeEditorUriScheme(vscode.env.uriScheme)
 
     for (const entry of entries) {
       const commandKey = `${entry.menuKey}\\command`
-      const command = `"${wscriptExe}" "${helperScript}" "${entry.arg}"`
+      const command = `"${wscriptExe}" "${helperScript}" "${entry.arg}" "${uriScheme}"`
 
       await execReg(['add', entry.menuKey, '/ve', '/d', '用 MAA Log Analyzer 分析', '/f'])
       await execReg(['add', entry.menuKey, '/v', 'Icon', '/d', iconPath, '/f'])
@@ -980,7 +985,7 @@ async function installWindowsContextMenu(context: vscode.ExtensionContext): Prom
   }
 }
 
-async function uninstallWindowsContextMenu(): Promise<void> {
+async function uninstallWindowsContextMenu(context: vscode.ExtensionContext): Promise<void> {
   if (process.platform !== 'win32') {
     vscode.window.showWarningMessage('该功能仅支持 Windows')
     return
@@ -993,21 +998,19 @@ async function uninstallWindowsContextMenu(): Promise<void> {
   )
   if (action !== '卸载') return
 
-  const menuKeys = [
-    'HKCU\\Software\\Classes\\Directory\\shell\\MaaLogAnalyzer',
-    'HKCU\\Software\\Classes\\Directory\\Background\\shell\\MaaLogAnalyzer',
-    'HKCU\\Software\\Classes\\SystemFileAssociations\\.log\\shell\\MaaLogAnalyzer',
-    'HKCU\\Software\\Classes\\SystemFileAssociations\\.zip\\shell\\MaaLogAnalyzer',
-  ]
-
   try {
     let removed = 0
-    for (const key of menuKeys) {
+    for (const key of WINDOWS_CONTEXT_MENU_KEYS) {
       if (await regKeyExists(key)) {
         await execReg(['delete', key, '/f'])
         removed++
       }
     }
+
+    await rm(path.join(context.globalStorageUri.fsPath, 'windows-context-menu'), {
+      recursive: true,
+      force: true,
+    })
 
     if (removed === 0) {
       vscode.window.showInformationMessage('右键菜单未安装，无需卸载')

@@ -122,10 +122,11 @@
     "vscode:prepublish": "npm run build:webview && npm run compile",
     "compile": "npm run typecheck && npm run bundle",
     "typecheck": "tsc -p ./ --noEmit",
-    "bundle": "esbuild ./src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js --sourcemap",
+    "bundle": "esbuild ./src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js --sourcemap && esbuild ./src/uninstall.ts --bundle --platform=node --format=cjs --target=node18 --outfile=dist/uninstall.js",
     "watch": "esbuild ./src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js --sourcemap --watch",
     "build:webview": "cd .. && corepack pnpm@10.34.5 build:vscode",
-    "package": "vsce package"
+    "package": "vsce package",
+    "vscode:uninstall": "node ./dist/uninstall.js"
   },
   "dependencies": {
     "fflate": "^0.8.2"
