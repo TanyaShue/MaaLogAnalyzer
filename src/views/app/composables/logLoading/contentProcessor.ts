@@ -1,6 +1,13 @@
 import { resolveDeferredTargets } from './deferredTargets'
 import type { LogLoadingPipelineOptions, ProcessLogContentParams } from './types'
 import { LogParser } from '@windsland52/maa-log-parser'
+import type { TaskInfo } from '../../../../types'
+import {
+  isLogParserWorkerSupported,
+  LogParserWorkerUnavailableError,
+  parseLogsInWorker,
+} from '../../../../utils/parserWorkerClient'
+import { reviveParsedTaskList } from '../../../../utils/parsedTaskRevival'
 
 export const createProcessLogContent = (
   options: LogLoadingPipelineOptions,
@@ -39,12 +46,39 @@ export const createProcessLogContent = (
         }
       }
 
-      if (params.parseInputs && params.parseInputs.length > 0) {
-        await parser.parseInputs(params.parseInputs, onProgress)
-      } else {
-        await parser.parseFile(params.content, onProgress)
+      const inputs = params.parseInputs && params.parseInputs.length > 0
+        ? params.parseInputs
+        : [{ content: params.content }]
+
+      const parseInline = async (): Promise<TaskInfo[]> => {
+        if (params.parseInputs && params.parseInputs.length > 0) {
+          await parser.parseInputs(params.parseInputs, onProgress)
+        } else {
+          await parser.parseFile(params.content, onProgress)
+        }
+        return parser.consumeTasks()
       }
-      const parsedTasks = parser.consumeTasks()
+
+      // 解析是内存峰值最高的一步。放进 Worker 后即使耗尽内存，被浏览器终止的也
+      // 只是该 Worker，主线程仍能提示用户；退回主线程解析仅用于不支持 Worker 的
+      // 环境（以及注入了 createParser 的测试）。
+      let parsedTasks: TaskInfo[]
+      if (options.createParser || !isLogParserWorkerSupported()) {
+        parsedTasks = await parseInline()
+      } else {
+        try {
+          parsedTasks = reviveParsedTaskList(await parseLogsInWorker({
+            inputs,
+            errorImages: params.errorImages,
+            visionImages: params.visionImages,
+            waitFreezesImages: params.waitFreezesImages,
+            onProgress: (percentage) => onProgress({ percentage }),
+          }))
+        } catch (error) {
+          if (!(error instanceof LogParserWorkerUnavailableError)) throw error
+          parsedTasks = await parseInline()
+        }
+      }
       if (requestId !== latestRequestId) return
       options.applyParsedTasks(parsedTasks, false)
 
