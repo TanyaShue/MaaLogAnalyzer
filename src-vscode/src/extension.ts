@@ -31,6 +31,7 @@ import {
 } from './windowsContextMenu'
 
 let currentPanel: vscode.WebviewPanel | undefined = undefined
+let webviewAssetRoot: vscode.Uri | undefined
 const loadOperationCoordinator = new LoadOperationCoordinator()
 const execFileAsync = promisify(execFile)
 const t = (message: string, ...args: Array<string | number | boolean>) => (
@@ -402,6 +403,7 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
   }
 
   // 创建新面板
+  webviewAssetRoot = vscode.Uri.joinPath(context.extensionUri, 'webview')
   currentPanel = vscode.window.createWebviewPanel(
     'maaLogAnalyzer',
     t('MAA Log Analyzer'),
@@ -410,7 +412,7 @@ function createOrShowPanel(context: vscode.ExtensionContext): vscode.WebviewPane
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [
-        vscode.Uri.joinPath(context.extensionUri, 'webview')
+        webviewAssetRoot,
       ]
     }
   )
@@ -786,6 +788,25 @@ interface DebugImageCandidate {
   size: number
 }
 
+interface DebugImageResource {
+  key: string
+  url: string
+}
+
+const configureWebviewImageRoot = (imageRoot?: vscode.Uri): vscode.Webview => {
+  const webview = currentPanel?.webview
+  if (!webview) throw new Error(t('The analyzer panel is not available'))
+  const localResourceRoots = [
+    ...(webviewAssetRoot ? [webviewAssetRoot] : []),
+    ...(imageRoot ? [imageRoot] : []),
+  ]
+  webview.options = {
+    ...webview.options,
+    localResourceRoots,
+  }
+  return webview
+}
+
 const bytesToBase64 = (bytes: Uint8Array): string => (
   Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')
 )
@@ -819,9 +840,9 @@ async function collectDebugAssetsForBaseDirectory(
   initialEntries: readonly ArchiveEntryMetadata[],
   operation: LoadOperation,
 ): Promise<{
-  errorImages: Array<{ key: string; base64: string }>
-  visionImages: Array<{ key: string; base64: string }>
-  waitFreezesImages: Array<{ key: string; base64: string }>
+  errorImages: DebugImageResource[]
+  visionImages: DebugImageResource[]
+  waitFreezesImages: DebugImageResource[]
 }> {
   const baseName = path.posix.basename(baseDirUri.path).toLowerCase()
   const candidateDirs = baseName === 'debug'
@@ -842,6 +863,7 @@ async function collectDebugAssetsForBaseDirectory(
   }
 
   if (!debugDirUri) {
+    configureWebviewImageRoot()
     return { errorImages: [], visionImages: [], waitFreezesImages: [] }
   }
 
@@ -872,20 +894,22 @@ async function collectDebugAssetsForBaseDirectory(
     ...candidates.map(candidate => createStoredEntryMetadata(candidate.uri.path, candidate.size)),
   ]
   assertExtractedEntriesWithinLimits(plannedEntries)
-  assertVSCodeIpcEntriesWithinLimits(plannedEntries)
 
-  const errorImages: Array<{ key: string; base64: string }> = []
-  const visionImages: Array<{ key: string; base64: string }> = []
-  const waitFreezesImages: Array<{ key: string; base64: string }> = []
+  const webview = configureWebviewImageRoot(debugDirUri)
+  const errorImages: DebugImageResource[] = []
+  const visionImages: DebugImageResource[] = []
+  const waitFreezesImages: DebugImageResource[] = []
   const actualEntries = [...initialEntries]
   for (const candidate of candidates) {
     operation.throwIfCancelled()
-    const bytes = await vscode.workspace.fs.readFile(candidate.uri)
+    const stat = await vscode.workspace.fs.stat(candidate.uri)
     operation.throwIfCancelled()
-    actualEntries.push(createStoredEntryMetadata(candidate.uri.path, bytes.byteLength))
+    actualEntries.push(createStoredEntryMetadata(candidate.uri.path, stat.size))
     assertExtractedEntriesWithinLimits(actualEntries)
-    assertVSCodeIpcEntriesWithinLimits(actualEntries)
-    const entry = { key: candidate.key, base64: bytesToBase64(bytes) }
+    const entry = {
+      key: candidate.key,
+      url: webview.asWebviewUri(candidate.uri).toString(),
+    }
     if (candidate.kind === 'error') errorImages.push(entry)
     else if (candidate.kind === 'vision') visionImages.push(entry)
     else waitFreezesImages.push(entry)

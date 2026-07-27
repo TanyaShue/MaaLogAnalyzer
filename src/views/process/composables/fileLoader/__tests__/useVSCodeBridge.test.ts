@@ -54,6 +54,35 @@ describe('VS Code loadFile bridge', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:error-image')
   })
 
+  it('forwards webview image resource URLs without Base64 decoding', () => {
+    const onUploadContent = vi.fn()
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL')
+    const imageUrl = 'https://file+.vscode-resource.vscode-cdn.net/c%3A/logs/vision/image.jpg'
+
+    expect(handleVSCodeLoadFilePayload(
+      {
+        type: 'loadFile',
+        content: 'log',
+        visionImages: [{ key: 'vision', url: imageUrl }],
+      },
+      {
+        onUploadContent,
+        onFileLoadingStart: vi.fn(),
+        onFileLoadingEnd: vi.fn(),
+      },
+    )).toBe(true)
+
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(onUploadContent).toHaveBeenCalledWith(
+      'log',
+      new Map(),
+      new Map([['vision', imageUrl]]),
+      new Map(),
+      undefined,
+      undefined,
+    )
+  })
+
   it('rejects malformed loaded-file entries without leaving loading active', () => {
     const onUploadContent = vi.fn()
     const onFileLoadingStart = vi.fn()

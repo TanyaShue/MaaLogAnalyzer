@@ -22,9 +22,9 @@ export interface VSCodeBridgePayload {
   selectedPaths?: string[]
   primaryLogFiles?: LoadedPrimaryLogFile[]
   textFiles?: LoadedTextFile[]
-  errorImages?: Array<{ key: string, base64: string }>
-  visionImages?: Array<{ key: string, base64: string }>
-  waitFreezesImages?: Array<{ key: string, base64: string }>
+  errorImages?: Array<{ key: string, base64?: string, url?: string }>
+  visionImages?: Array<{ key: string, base64?: string, url?: string }>
+  waitFreezesImages?: Array<{ key: string, base64?: string, url?: string }>
 }
 
 type VSCodeLoadFileOptions = Pick<
@@ -88,7 +88,7 @@ const decodeBase64Bytes = (
   return bytes
 }
 
-const decodeBase64ImageEntries = (
+const decodeImageEntries = (
   value: unknown,
   mimeType: string,
   label: string,
@@ -102,6 +102,15 @@ const decodeBase64ImageEntries = (
     for (let index = 0; index < value.length; index += 1) {
       const entry = asRecord(value[index], `${label}[${index}]`)
       const key = asString(entry.key, `${label}[${index}].key`)
+      if (entry.url != null) {
+        const url = asString(entry.url, `${label}[${index}].url`)
+        const protocol = new URL(url).protocol
+        if (!['https:', 'vscode-resource:', 'vscode-webview-resource:'].includes(protocol)) {
+          throw new InputResourceLimitError(`${label}[${index}].url 协议无效`)
+        }
+        images.set(key, url)
+        continue
+      }
       const base64 = asString(entry.base64, `${label}[${index}].base64`)
       const bytes = decodeBase64Bytes(base64, `${label}/${index}/${key}`, budget, { image: true })
       replaceBlobUrl(images, key, new Blob([bytes], { type: mimeType }))
@@ -185,11 +194,11 @@ export const handleVSCodeLoadFilePayload = (
       budget,
     )
     const textFiles = decodeLoadedTextEntries<LoadedTextFile>(message.textFiles, 'textFiles', budget)
-    const errorImages = decodeBase64ImageEntries(message.errorImages, 'image/png', 'errorImages', budget)
+    const errorImages = decodeImageEntries(message.errorImages, 'image/png', 'errorImages', budget)
     createdImageMaps.push(errorImages)
-    const visionImages = decodeBase64ImageEntries(message.visionImages, 'image/jpeg', 'visionImages', budget)
+    const visionImages = decodeImageEntries(message.visionImages, 'image/jpeg', 'visionImages', budget)
     createdImageMaps.push(visionImages)
-    const waitFreezesImages = decodeBase64ImageEntries(
+    const waitFreezesImages = decodeImageEntries(
       message.waitFreezesImages,
       'image/jpeg',
       'waitFreezesImages',

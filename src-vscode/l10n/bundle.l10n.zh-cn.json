@@ -20,6 +20,7 @@
   "Network path: {0}\n\nThis can contact a remote server. Continue only if you trust the application and network location that sent this request.": "网络路径：{0}\n\n该操作可能连接远程服务器。仅当你信任发起请求的应用和网络位置时继续。",
   "Path: {0}\n\nContinue only if you initiated or trust this request.": "路径：{0}\n\n仅当该请求由你发起或来源可信时继续。",
   "MAA Log Analyzer": "MAA 日志分析器",
+  "The analyzer panel is not available": "分析器面板不可用",
   "Log Files": "日志文件",
   "Select Log File": "选择日志文件",
   "Select Log Folder": "选择日志文件夹",
