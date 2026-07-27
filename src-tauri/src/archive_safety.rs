@@ -65,6 +65,21 @@ pub(crate) const ARCHIVE_LIMITS: ArchiveLimits = ArchiveLimits {
     compression_ratio_min_bytes: 1024 * 1024,
 };
 
+// Used only after the user explicitly chooses “坚持解析”. Structural limits
+// remain unchanged; byte budgets and compression-ratio checks are relaxed.
+pub(crate) const INSIST_ARCHIVE_LIMITS: ArchiveLimits = ArchiveLimits {
+    max_volumes: ARCHIVE_LIMITS.max_volumes,
+    max_compressed_bytes: u64::MAX,
+    max_entries: ARCHIVE_LIMITS.max_entries,
+    max_path_bytes: ARCHIVE_LIMITS.max_path_bytes,
+    max_total_path_bytes: ARCHIVE_LIMITS.max_total_path_bytes,
+    max_file_bytes: u64::MAX,
+    max_image_bytes: u64::MAX,
+    max_extracted_bytes: u64::MAX,
+    max_compression_ratio: u64::MAX,
+    compression_ratio_min_bytes: u64::MAX,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ArchiveLimitKind {
     VolumeCount,
@@ -1210,6 +1225,32 @@ mod tests {
         for (key, value) in expected {
             assert_eq!(configured[key].as_u64(), Some(value), "{key}");
         }
+    }
+
+    #[test]
+    fn insist_limits_relax_bytes_but_keep_structural_budgets() {
+        assert_eq!(
+            super::INSIST_ARCHIVE_LIMITS.max_volumes,
+            ARCHIVE_LIMITS.max_volumes
+        );
+        assert_eq!(
+            super::INSIST_ARCHIVE_LIMITS.max_entries,
+            ARCHIVE_LIMITS.max_entries
+        );
+        assert_eq!(
+            super::INSIST_ARCHIVE_LIMITS.max_path_bytes,
+            ARCHIVE_LIMITS.max_path_bytes
+        );
+        assert_eq!(
+            super::INSIST_ARCHIVE_LIMITS.max_total_path_bytes,
+            ARCHIVE_LIMITS.max_total_path_bytes
+        );
+        assert_eq!(super::INSIST_ARCHIVE_LIMITS.max_file_bytes, u64::MAX);
+        assert_eq!(super::INSIST_ARCHIVE_LIMITS.max_extracted_bytes, u64::MAX);
+        assert_eq!(
+            super::INSIST_ARCHIVE_LIMITS.compression_ratio_min_bytes,
+            u64::MAX
+        );
     }
 
     #[test]

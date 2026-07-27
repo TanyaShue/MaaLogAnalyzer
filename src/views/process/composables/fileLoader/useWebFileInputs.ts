@@ -25,6 +25,7 @@ import {
 } from '../../../../utils/browserInputBudget'
 import { revokeBlobUrlMap } from '../../../../utils/blobUrlMap'
 import type { FileLoadOperationGate } from './operationGate'
+import { confirmInsistParsing, INSIST_ARCHIVE_LIMITS } from '../../../../utils/archiveLimits'
 
 const getFileRelativePath = (file: File): string => {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
@@ -42,6 +43,17 @@ const filterFilesBySelectedDir = (files: Iterable<File>, selectedDirPath: string
 const getMxuZipUpload = (files: File[], anchor: File): File | File[] => {
   const volumes = collectMxuZipVolumes(files, anchor)
   return volumes.length > 1 ? volumes : anchor
+}
+
+const withInsistBrowserBudget = async <T>(
+  load: (budget: BrowserInputBudget) => Promise<T>,
+): Promise<T> => {
+  try {
+    return await load(createBrowserInputBudget())
+  } catch (error) {
+    if (!confirmInsistParsing(error)) throw error
+    return load(createBrowserInputBudget(INSIST_ARCHIVE_LIMITS))
+  }
 }
 
 const resolveSelectedLogContent = async (
@@ -131,38 +143,46 @@ export const useWebFileInputs = (
     try {
       if (!operationGate.startLoading(generation)) return
 
-      const budget = createBrowserInputBudget()
-      const files = await readDirectoryFiles(dirEntry, '', budget)
-      if (!operationGate.isCurrent(generation)) return
-      const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs, budget)
-      if (!operationGate.isCurrent(generation)) return
-      if (cancelled) return
-      if (primaryLogFiles.length === 0) {
-        const volumes = findMxuZipVolumes(files)
-        if (volumes.length > 0) {
-          operationGate.finish(generation)
-          options.onUploadFile(volumes.length > 1 ? volumes : volumes[0], options.selectPrimaryLogs)
+      await withInsistBrowserBudget(async (budget) => {
+        const files = await readDirectoryFiles(dirEntry, '', budget)
+        if (!operationGate.isCurrent(generation)) return
+        const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(
+          files,
+          options.selectPrimaryLogs,
+          budget,
+        )
+        if (!operationGate.isCurrent(generation)) return
+        if (cancelled) return
+        if (primaryLogFiles.length === 0) {
+          const volumes = findMxuZipVolumes(files)
+          if (volumes.length > 0) {
+            operationGate.finish(generation)
+            options.onUploadFile(
+              volumes.length > 1 ? volumes : volumes[0],
+              options.selectPrimaryLogs,
+            )
+            return
+          }
+          toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
           return
         }
-        toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-        return
-      }
 
-      const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
-      if (!operationGate.isCurrent(generation)) return
-      const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
-      if (!operationGate.isCurrent(generation)) {
-        revokeDebugAssets(debugAssets)
-        return
-      }
-      options.onUploadContent(
-        '',
-        debugAssets.errorImages,
-        debugAssets.visionImages,
-        debugAssets.waitFreezesImages,
-        textFiles,
-        primaryLogFiles,
-      )
+        const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+        if (!operationGate.isCurrent(generation)) return
+        const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
+        if (!operationGate.isCurrent(generation)) {
+          revokeDebugAssets(debugAssets)
+          return
+        }
+        options.onUploadContent(
+          '',
+          debugAssets.errorImages,
+          debugAssets.visionImages,
+          debugAssets.waitFreezesImages,
+          textFiles,
+          primaryLogFiles,
+        )
+      })
     } catch (error) {
       if (operationGate.isCurrent(generation)) toastError('读取文件夹失败: ' + error)
     } finally {
@@ -208,36 +228,44 @@ export const useWebFileInputs = (
     try {
       if (!operationGate.startLoading(generation)) return
 
-      const budget = createBrowserInputBudget()
-      const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(files, options.selectPrimaryLogs, budget)
-      if (!operationGate.isCurrent(generation)) return
-      if (cancelled) return
-      if (primaryLogFiles.length === 0) {
-        const volumes = findMxuZipVolumes(files)
-        if (volumes.length > 0) {
-          operationGate.finish(generation)
-          options.onUploadFile(volumes.length > 1 ? volumes : volumes[0], options.selectPrimaryLogs)
+      await withInsistBrowserBudget(async (budget) => {
+        const { scopedFiles, primaryLogFiles, cancelled } = await resolveSelectedLogContent(
+          files,
+          options.selectPrimaryLogs,
+          budget,
+        )
+        if (!operationGate.isCurrent(generation)) return
+        if (cancelled) return
+        if (primaryLogFiles.length === 0) {
+          const volumes = findMxuZipVolumes(Array.from(files))
+          if (volumes.length > 0) {
+            operationGate.finish(generation)
+            options.onUploadFile(
+              volumes.length > 1 ? volumes : volumes[0],
+              options.selectPrimaryLogs,
+            )
+            return
+          }
+          toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
           return
         }
-        toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-        return
-      }
 
-      const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
-      if (!operationGate.isCurrent(generation)) return
-      const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
-      if (!operationGate.isCurrent(generation)) {
-        revokeDebugAssets(debugAssets)
-        return
-      }
-      options.onUploadContent(
-        '',
-        debugAssets.errorImages,
-        debugAssets.visionImages,
-        debugAssets.waitFreezesImages,
-        textFiles,
-        primaryLogFiles,
-      )
+        const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+        if (!operationGate.isCurrent(generation)) return
+        const debugAssets = await collectDebugAssetsFromFiles(scopedFiles, budget)
+        if (!operationGate.isCurrent(generation)) {
+          revokeDebugAssets(debugAssets)
+          return
+        }
+        options.onUploadContent(
+          '',
+          debugAssets.errorImages,
+          debugAssets.visionImages,
+          debugAssets.waitFreezesImages,
+          textFiles,
+          primaryLogFiles,
+        )
+      })
     } catch (error) {
       if (operationGate.isCurrent(generation)) toastError('读取文件失败: ' + error)
     } finally {

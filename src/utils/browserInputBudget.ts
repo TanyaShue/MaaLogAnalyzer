@@ -1,4 +1,4 @@
-import { ArchiveLimitError, DEFAULT_ARCHIVE_LIMITS } from './archiveLimits'
+import { ArchiveLimitError, DEFAULT_ARCHIVE_LIMITS, type ArchiveLimits } from './archiveLimits'
 
 export const BROWSER_INPUT_MAX_DIRECTORY_DEPTH = 64
 const utf8Encoder = new TextEncoder()
@@ -14,6 +14,7 @@ export class InputResourceLimitError extends Error {
 export { InputResourceLimitError as BrowserInputLimitError }
 
 export interface InputResourceBudget {
+  readonly limits: Readonly<ArchiveLimits>
   entryCount: number
   totalPathBytes: number
   selectedBytes: number
@@ -26,7 +27,10 @@ export interface BrowserInputBudget extends InputResourceBudget {
   readonly chargedFiles: WeakSet<File>
 }
 
-export const createInputResourceBudget = (): InputResourceBudget => ({
+export const createInputResourceBudget = (
+  limits: Readonly<ArchiveLimits> = DEFAULT_ARCHIVE_LIMITS,
+): InputResourceBudget => ({
+  limits,
   entryCount: 0,
   totalPathBytes: 0,
   selectedBytes: 0,
@@ -34,8 +38,10 @@ export const createInputResourceBudget = (): InputResourceBudget => ({
   chargedPaths: new Set<string>(),
 })
 
-export const createBrowserInputBudget = (): BrowserInputBudget => ({
-  ...createInputResourceBudget(),
+export const createBrowserInputBudget = (
+  limits: Readonly<ArchiveLimits> = DEFAULT_ARCHIVE_LIMITS,
+): BrowserInputBudget => ({
+  ...createInputResourceBudget(limits),
   registeredFiles: new WeakSet<File>(),
   chargedFiles: new WeakSet<File>(),
 })
@@ -59,20 +65,23 @@ export const registerInputResourceEntry = (
   if (budget.registeredPaths.has(normalizedPath)) return
 
   const pathBytes = utf8Encoder.encode(normalizedPath).byteLength
-  if (pathBytes > DEFAULT_ARCHIVE_LIMITS.maxPathBytes) {
-    throw new ArchiveLimitError('path-size', pathBytes, DEFAULT_ARCHIVE_LIMITS.maxPathBytes)
+  if (pathBytes > budget.limits.maxPathBytes) {
+    throw new ArchiveLimitError('path-size', pathBytes, budget.limits.maxPathBytes)
   }
 
   const nextEntryCount = budget.entryCount + 1
   const nextTotalPathBytes = budget.totalPathBytes + pathBytes
-  if (!Number.isSafeInteger(nextEntryCount) || nextEntryCount > DEFAULT_ARCHIVE_LIMITS.maxEntries) {
-    throw new ArchiveLimitError('entry-count', nextEntryCount, DEFAULT_ARCHIVE_LIMITS.maxEntries)
+  if (!Number.isSafeInteger(nextEntryCount) || nextEntryCount > budget.limits.maxEntries) {
+    throw new ArchiveLimitError('entry-count', nextEntryCount, budget.limits.maxEntries)
   }
-  if (!Number.isSafeInteger(nextTotalPathBytes) || nextTotalPathBytes > DEFAULT_ARCHIVE_LIMITS.maxTotalPathBytes) {
+  if (
+    !Number.isSafeInteger(nextTotalPathBytes) ||
+    nextTotalPathBytes > budget.limits.maxTotalPathBytes
+  ) {
     throw new ArchiveLimitError(
       'total-path-size',
       nextTotalPathBytes,
-      DEFAULT_ARCHIVE_LIMITS.maxTotalPathBytes,
+      budget.limits.maxTotalPathBytes,
     )
   }
 
@@ -91,19 +100,22 @@ export const chargeInputResourceBytes = (
   if (!Number.isSafeInteger(size) || size < 0) {
     throw new InputResourceLimitError('文件系统返回了无效的文件大小')
   }
-  if (size > DEFAULT_ARCHIVE_LIMITS.maxFileBytes) {
-    throw new ArchiveLimitError('file-size', size, DEFAULT_ARCHIVE_LIMITS.maxFileBytes)
+  if (size > budget.limits.maxFileBytes) {
+    throw new ArchiveLimitError('file-size', size, budget.limits.maxFileBytes)
   }
-  if (options.image && size > DEFAULT_ARCHIVE_LIMITS.maxImageBytes) {
-    throw new ArchiveLimitError('image-size', size, DEFAULT_ARCHIVE_LIMITS.maxImageBytes)
+  if (options.image && size > budget.limits.maxImageBytes) {
+    throw new ArchiveLimitError('image-size', size, budget.limits.maxImageBytes)
   }
 
   const nextSelectedBytes = budget.selectedBytes + size
-  if (!Number.isSafeInteger(nextSelectedBytes) || nextSelectedBytes > DEFAULT_ARCHIVE_LIMITS.maxExtractedBytes) {
+  if (
+    !Number.isSafeInteger(nextSelectedBytes) ||
+    nextSelectedBytes > budget.limits.maxExtractedBytes
+  ) {
     throw new ArchiveLimitError(
       'extracted-size',
       nextSelectedBytes,
-      DEFAULT_ARCHIVE_LIMITS.maxExtractedBytes,
+      budget.limits.maxExtractedBytes,
     )
   }
   budget.selectedBytes = nextSelectedBytes

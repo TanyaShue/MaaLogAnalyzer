@@ -32,6 +32,7 @@ import {
   registerInputResourceEntry,
   type BrowserInputBudget,
 } from '../../../utils/browserInputBudget'
+import { confirmInsistParsing, INSIST_ARCHIVE_LIMITS } from '../../../utils/archiveLimits'
 
 interface UseFlowchartUploadOptions {
   onUploadFile: (file: File | File[]) => void
@@ -60,6 +61,17 @@ export const useFlowchartUpload = ({
   }
 
   const isCurrentUpload = (generation: number) => generation === uploadGeneration
+
+  const withInsistBrowserBudget = async <T>(
+    load: (budget: BrowserInputBudget) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await load(createBrowserInputBudget())
+    } catch (error) {
+      if (!confirmInsistParsing(error)) throw error
+      return load(createBrowserInputBudget(INSIST_ARCHIVE_LIMITS))
+    }
+  }
 
   const revokeUploadImages = (...maps: Array<Map<string, string>>) => {
     for (const map of maps) revokeBlobUrlMap(map)
@@ -199,14 +211,29 @@ export const useFlowchartUpload = ({
         if (!path) return
         if (path.toLowerCase().endsWith('.zip')) {
           const { invoke } = await import('@tauri-apps/api/core')
-          const result = await invoke<{
+          type ArchiveResult = {
             content: string
             primary_log_files: LoadedPrimaryLogFile[]
             error_images: Record<string, string>
             vision_images: Record<string, string>
             wait_freezes_images: Record<string, string>
             resource_token?: string | null
-          }>('extract_zip_log', { path, paths: selectedPaths })
+          }
+          let result: ArchiveResult
+          try {
+            result = await invoke<ArchiveResult>('extract_zip_log', {
+              path,
+              paths: selectedPaths,
+              insist: false,
+            })
+          } catch (error) {
+            if (!confirmInsistParsing(error)) throw error
+            result = await invoke<ArchiveResult>('extract_zip_log', {
+              path,
+              paths: selectedPaths,
+              insist: true,
+            })
+          }
           await emitUploadContent(
             result.content,
             toImageMap(result.error_images),
@@ -219,9 +246,16 @@ export const useFlowchartUpload = ({
           )
         } else {
           const { readFile } = await import('@tauri-apps/plugin-fs')
-          const budget = createInputResourceBudget()
-          registerInputResourceEntry(budget, path, 0)
-          await chargeTauriRegularFile(path, budget)
+          try {
+            const budget = createInputResourceBudget()
+            registerInputResourceEntry(budget, path, 0)
+            await chargeTauriRegularFile(path, budget)
+          } catch (error) {
+            if (!confirmInsistParsing(error)) throw error
+            const budget = createInputResourceBudget(INSIST_ARCHIVE_LIMITS)
+            registerInputResourceEntry(budget, path, 0)
+            await chargeTauriRegularFile(path, budget)
+          }
           const fileName = path.split(/[/\\]/).pop() || 'loaded.log'
           await emitUploadContent(
             '',
@@ -275,60 +309,64 @@ export const useFlowchartUpload = ({
     const generation = beginUpload()
 
     try {
-      const budget = createBrowserInputBudget()
-      const { scopedFiles, primaryLogFiles } = await resolveSelectedLogContentFromFiles(files, budget)
-      if (!isCurrentUpload(generation)) return
-      if (primaryLogFiles.length === 0) {
-        const volumes = findMxuZipVolumes(files)
-        if (volumes.length > 0) {
-          emitUploadFile(volumes.length > 1 ? volumes : volumes[0], generation)
+      await withInsistBrowserBudget(async (budget) => {
+        const { scopedFiles, primaryLogFiles } = await resolveSelectedLogContentFromFiles(
+          files,
+          budget,
+        )
+        if (!isCurrentUpload(generation)) return
+        if (primaryLogFiles.length === 0) {
+          const volumes = findMxuZipVolumes(files)
+          if (volumes.length > 0) {
+            emitUploadFile(volumes.length > 1 ? volumes : volumes[0], generation)
+            return
+          }
+          toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
           return
         }
-        toastWarning(`文件夹中未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-        return
-      }
 
-      const errorImages = new Map<string, string>()
-      const visionImages = new Map<string, string>()
-      const waitFreezesImages = new Map<string, string>()
+        const errorImages = new Map<string, string>()
+        const visionImages = new Map<string, string>()
+        const waitFreezesImages = new Map<string, string>()
 
-      for (const file of scopedFiles) {
-        const name = file.name.toLowerCase()
-        if (name.endsWith('.png') || name.endsWith('.jpg')) {
-          chargeBrowserInputFile(budget, file, { image: true })
-        }
-      }
-
-      try {
         for (const file of scopedFiles) {
           const name = file.name.toLowerCase()
           if (name.endsWith('.png') || name.endsWith('.jpg')) {
-            const baseName = file.name.replace(/\.(png|jpg)$/i, '')
-            if (baseName.endsWith('_wait_freezes')) {
-              replaceBlobUrl(waitFreezesImages, baseName, file)
-            } else if (baseName.includes('_vision_')) {
-              replaceBlobUrl(visionImages, baseName, file)
-            } else {
-              replaceBlobUrl(errorImages, baseName, file)
-            }
+            chargeBrowserInputFile(budget, file, { image: true })
           }
         }
 
-        const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
-        await emitUploadContent(
-          '',
-          errorImages,
-          visionImages,
-          waitFreezesImages,
-          textFiles,
-          primaryLogFiles,
-          undefined,
-          generation,
-        )
-      } catch (error) {
-        revokeUploadImages(errorImages, visionImages, waitFreezesImages)
-        throw error
-      }
+        try {
+          for (const file of scopedFiles) {
+            const name = file.name.toLowerCase()
+            if (name.endsWith('.png') || name.endsWith('.jpg')) {
+              const baseName = file.name.replace(/\.(png|jpg)$/i, '')
+              if (baseName.endsWith('_wait_freezes')) {
+                replaceBlobUrl(waitFreezesImages, baseName, file)
+              } else if (baseName.includes('_vision_')) {
+                replaceBlobUrl(visionImages, baseName, file)
+              } else {
+                replaceBlobUrl(errorImages, baseName, file)
+              }
+            }
+          }
+
+          const textFiles = await collectTextFilesFromFiles(scopedFiles, budget)
+          await emitUploadContent(
+            '',
+            errorImages,
+            visionImages,
+            waitFreezesImages,
+            textFiles,
+            primaryLogFiles,
+            undefined,
+            generation,
+          )
+        } catch (error) {
+          revokeUploadImages(errorImages, visionImages, waitFreezesImages)
+          throw error
+        }
+      })
     } finally {
       input.value = ''
     }

@@ -24,7 +24,18 @@ export type ArchiveBudgetCode =
   | 'image-size'
   | 'extracted-size'
   | 'compression-ratio'
-  | 'ipc-size'
+
+const archiveBudgetCodes: ReadonlySet<ArchiveBudgetCode> = new Set([
+  'volume-count',
+  'compressed-size',
+  'entry-count',
+  'path-size',
+  'total-path-size',
+  'file-size',
+  'image-size',
+  'extracted-size',
+  'compression-ratio',
+])
 
 export class ArchiveBudgetError extends Error {
   readonly name = 'ArchiveBudgetError'
@@ -36,6 +47,17 @@ export class ArchiveBudgetError extends Error {
   ) {
     super(`Archive ${code} exceeds the configured limit (${actual} > ${limit})`)
   }
+}
+
+export const getArchiveBudgetCode = (error: unknown): ArchiveBudgetCode | null => {
+  if (error instanceof ArchiveBudgetError) return error.code
+
+  const message = error instanceof Error ? error.message : String(error)
+  const match = /Archive ([a-z-]+) exceeds the configured limit/u.exec(message)
+  const code = match?.[1]
+  return archiveBudgetCodes.has(code as ArchiveBudgetCode)
+    ? code as ArchiveBudgetCode
+    : null
 }
 
 export class ArchiveIntegrityError extends Error {
@@ -221,6 +243,15 @@ const validateLimits = (limits: ArchiveLimits): Readonly<ArchiveLimits> => {
 }
 
 export const DEFAULT_ARCHIVE_LIMITS = validateLimits({ ...configuredArchiveLimits })
+
+export const INSIST_ARCHIVE_LIMIT_OVERRIDES: Readonly<Partial<ArchiveLimits>> = Object.freeze({
+  maxCompressedBytes: Number.MAX_SAFE_INTEGER,
+  maxFileBytes: Number.MAX_SAFE_INTEGER,
+  maxImageBytes: Number.MAX_SAFE_INTEGER,
+  maxExtractedBytes: Number.MAX_SAFE_INTEGER,
+  maxCompressionRatio: Number.MAX_SAFE_INTEGER,
+  compressionRatioMinBytes: Number.MAX_SAFE_INTEGER,
+})
 
 export const resolveArchiveLimits = (
   overrides: Partial<ArchiveLimits> = {},
@@ -444,33 +475,6 @@ export const getNeededArchiveEntries = (
 )
 
 const isImageEntry = (name: string): boolean => /\.(?:png|jpe?g)$/i.test(name)
-
-// Structured-cloned strings and webview-side Base64 decoding retain several
-// representations at once. Weight every raw byte conservatively so the IPC
-// payload stays far below the general 512 MiB extraction allowance.
-export const MAX_VSCODE_IPC_MEMORY_ESTIMATE_BYTES = 512 * 1024 * 1024
-const TEXT_IPC_MEMORY_MULTIPLIER = 8
-const IMAGE_IPC_MEMORY_MULTIPLIER = 8
-
-export const assertVSCodeIpcEntriesWithinLimits = (
-  entries: readonly ArchiveEntryMetadata[],
-): void => {
-  let estimatedBytes = 0
-  for (const entry of entries) {
-    assertMetadataInteger(entry.originalSize, 'IPC entry size')
-    const multiplier = isImageEntry(entry.name)
-      ? IMAGE_IPC_MEMORY_MULTIPLIER
-      : TEXT_IPC_MEMORY_MULTIPLIER
-    const entryEstimate = entry.originalSize * multiplier
-    if (!Number.isSafeInteger(entryEstimate)) {
-      throw new Error('Invalid archive metadata: IPC size estimate exceeds the safe integer range')
-    }
-    estimatedBytes = addSize(estimatedBytes, entryEstimate, 'IPC size estimate')
-    if (estimatedBytes > MAX_VSCODE_IPC_MEMORY_ESTIMATE_BYTES) {
-      throwBudgetError('ipc-size', estimatedBytes, MAX_VSCODE_IPC_MEMORY_ESTIMATE_BYTES)
-    }
-  }
-}
 
 export const assertExtractedEntriesWithinLimits = (
   entries: readonly ArchiveEntryMetadata[],
@@ -709,16 +713,15 @@ export const readSelectedArchiveVolumes = async <T>(
 ): Promise<void> => {
   checkActive()
   const limits = resolveArchiveLimits(limitOverrides)
-  const inputs = inspectedVolumes.map(volume => volume.input)
+  const inputs = inspectedVolumes.map((volume) => volume.input)
   assertArchiveInputsWithinLimits(inputs, limits)
 
   // Validate the complete extraction plan before allocating a second archive
   // buffer. Duplicate paths in independent MXU volumes are counted separately.
-  const plannedEntries = inspectedVolumes.flatMap(
-    volume => getNeededArchiveEntries(volume.entries, selection),
+  const plannedEntries = inspectedVolumes.flatMap((volume) =>
+    getNeededArchiveEntries(volume.entries, selection),
   )
   assertExtractedEntriesWithinLimits(plannedEntries, limits)
-  assertVSCodeIpcEntriesWithinLimits(plannedEntries)
   checkActive()
 
   const actualInputs: Array<{ size: number }> = []
@@ -742,7 +745,6 @@ export const readSelectedArchiveVolumes = async <T>(
     const neededEntries = getNeededArchiveEntries(currentDirectory.entries, selection)
     currentSelectedEntries.push(...neededEntries)
     assertExtractedEntriesWithinLimits(currentSelectedEntries, limits)
-    assertVSCodeIpcEntriesWithinLimits(currentSelectedEntries)
 
     if (neededEntries.length === 0) continue
     checkActive()

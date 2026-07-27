@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveArchiveLimits } from '../archiveLimits'
+import { INSIST_ARCHIVE_LIMITS, resolveArchiveLimits } from '../archiveLimits'
 import {
   BrowserInputLimitError,
   chargeBrowserInputFile,
@@ -46,13 +46,23 @@ describe('browser input resource budgets', () => {
   it('rejects oversized selected files and aggregate selected bytes', () => {
     const limits = resolveArchiveLimits()
     const oversized = { size: limits.maxFileBytes + 1 } as File
-    expect(() => chargeBrowserInputFile(createBrowserInputBudget(), oversized))
-      .toThrow(/file-size/)
+    expect(() => chargeBrowserInputFile(createBrowserInputBudget(), oversized)).toThrow(/file-size/)
 
     const budget = createBrowserInputBudget()
     budget.selectedBytes = limits.maxExtractedBytes
-    expect(() => chargeBrowserInputFile(budget, new File(['x'], 'extra.log')))
-      .toThrow(/extracted-size/)
+    expect(() => chargeBrowserInputFile(budget, new File(['x'], 'extra.log'))).toThrow(
+      /extracted-size/,
+    )
+  })
+
+  it('uses the supplied limits for an explicit insist retry', () => {
+    const limits = resolveArchiveLimits()
+    const oversized = { size: limits.maxFileBytes + 1 } as File
+
+    expect(() => chargeBrowserInputFile(createBrowserInputBudget(), oversized)).toThrow(/file-size/)
+    expect(() =>
+      chargeBrowserInputFile(createBrowserInputBudget(INSIST_ARCHIVE_LIMITS), oversized),
+    ).not.toThrow()
   })
 
   it('does not preload primary logs a second time as auxiliary text files', async () => {

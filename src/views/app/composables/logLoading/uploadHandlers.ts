@@ -11,6 +11,10 @@ import type { ProcessLogContentParams } from './types'
 import type { DeferredTextSearchTarget, TextSearchLoadedTarget } from '../useTextSearchTargets'
 import { getTextFileContentLoader } from '../../../../utils/textFileSource'
 import { decodeFileContent } from '../../../../utils/textEncoding'
+import {
+  confirmInsistParsing,
+  INSIST_ARCHIVE_LIMIT_OVERRIDES,
+} from '../../../../utils/archiveLimits'
 
 interface CreateUploadHandlersOptions {
   pipeline: LogLoadingPipelineOptions
@@ -78,7 +82,15 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
         pipeline.onFileLoadingStart?.()
         let fileLoadingActive = true
         try {
-          const result = await extractArchiveContents(files, selectPrimaryLogs)
+          let result
+          try {
+            result = await extractArchiveContents(files, selectPrimaryLogs)
+          } catch (error) {
+            if (!confirmInsistParsing(error)) throw error
+            result = await extractArchiveContents(files, selectPrimaryLogs, undefined, {
+              archiveLimits: INSIST_ARCHIVE_LIMIT_OVERRIDES,
+            })
+          }
           if (!result) {
             pipeline.onWarning('压缩包中未找到有效的日志文件')
             return

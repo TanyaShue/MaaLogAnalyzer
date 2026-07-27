@@ -4,9 +4,9 @@ import {
   ArchiveBudgetError,
   ArchiveIntegrityError,
   assertExtractedEntriesWithinLimits,
-  assertVSCodeIpcEntriesWithinLimits,
   canonicalizeArchivePath,
   createArchiveSelection,
+  getArchiveBudgetCode,
   inspectArchiveVolumes,
   readSelectedArchiveVolumes,
   resolveArchiveLimits,
@@ -56,6 +56,12 @@ const expectBudgetCode = async (
 }
 
 describe('VS Code archive reader budgets', () => {
+  it('recognizes budget errors after their Error prototype identity is lost', () => {
+    expect(getArchiveBudgetCode(
+      new Error('ArchiveBudgetError: Archive extracted-size exceeds the configured limit (600 > 512)'),
+    )).toBe('extracted-size')
+  })
+
   it('rejects oversized stat metadata before reading any volume', async () => {
     const input: ArchiveVolumeInput<string> = { source: 'large.zip', name: 'large.zip', size: 11 }
     const readVolume = vi.fn(async () => makeZip({ 'maa.log': 'log' }))
@@ -227,29 +233,6 @@ describe('VS Code archive reader budgets', () => {
     expect(consumeEntries).not.toHaveBeenCalled()
   })
 
-  it('rechecks the IPC budget if a volume grows during selection', async () => {
-    const original = makeZip({ 'debug/maa.log': 'small' })
-    const changed = makeZip({ 'debug/maa.log': 'x'.repeat(65 * 1024 * 1024) })
-    const input = { source: 'logs.zip', name: 'logs.zip', size: original.byteLength }
-    const readVolume = vi.fn()
-      .mockResolvedValueOnce(original)
-      .mockResolvedValueOnce(changed)
-    const inspected = await inspectArchiveVolumes([input], readVolume)
-    const consumeEntries = vi.fn()
-
-    await expectBudgetCode(
-      readSelectedArchiveVolumes(
-        inspected,
-        createArchiveSelection(['debug/maa.log'], 'debug'),
-        readVolume,
-        consumeEntries,
-        { maxCompressionRatio: 1_000_000_000 },
-      ),
-      'ipc-size',
-    )
-    expect(consumeEntries).not.toHaveBeenCalled()
-  })
-
   it.each([
     { name: 'stored', level: 0 },
     { name: 'deflated', level: 9 },
@@ -288,12 +271,4 @@ describe('VS Code archive reader budgets', () => {
     await expect(inspectArchiveVolumes(inputs, readVolume)).rejects.toBeInstanceOf(ArchiveIntegrityError)
   })
 
-  it('caps the estimated VS Code IPC representation size', () => {
-    expect(() => assertVSCodeIpcEntriesWithinLimits([{
-      name: 'debug/on_error/image.png',
-      size: 65 * 1024 * 1024,
-      originalSize: 65 * 1024 * 1024,
-      compression: 0,
-    }])).toThrow(expect.objectContaining({ code: 'ipc-size' }))
-  })
 })

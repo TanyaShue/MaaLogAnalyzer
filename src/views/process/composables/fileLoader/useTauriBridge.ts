@@ -17,6 +17,16 @@ import {
   registerInputResourceEntry,
 } from '../../../../utils/browserInputBudget'
 import type { FileLoadOperationGate } from './operationGate'
+import { confirmInsistParsing, INSIST_ARCHIVE_LIMITS } from '../../../../utils/archiveLimits'
+
+interface TauriArchiveLoadResult {
+  content: string
+  primary_log_files: LoadedPrimaryLogFile[]
+  error_images: Record<string, string>
+  vision_images: Record<string, string>
+  wait_freezes_images: Record<string, string>
+  resource_token?: string | null
+}
 
 const createTauriImageMap = (entries: Record<string, string>) => {
   const result = new Map<string, string>()
@@ -55,14 +65,21 @@ export const useTauriBridge = (
             let resourceToken: string | null = null
             let adoptedResource = false
             try {
-              const result = await invoke<{
-                content: string
-                primary_log_files: LoadedPrimaryLogFile[]
-                error_images: Record<string, string>
-                vision_images: Record<string, string>
-                wait_freezes_images: Record<string, string>
-                resource_token?: string | null
-              }>('extract_zip_log', { path: anchor, paths: selectedPaths })
+              let result: TauriArchiveLoadResult
+              try {
+                result = await invoke<TauriArchiveLoadResult>('extract_zip_log', {
+                  path: anchor,
+                  paths: selectedPaths,
+                  insist: false,
+                })
+              } catch (error) {
+                if (!confirmInsistParsing(error)) throw error
+                result = await invoke<TauriArchiveLoadResult>('extract_zip_log', {
+                  path: anchor,
+                  paths: selectedPaths,
+                  insist: true,
+                })
+              }
               resourceToken = result.resource_token ?? null
               if (!operationGate.isCurrent(generation)) return
 
@@ -97,9 +114,16 @@ export const useTauriBridge = (
             }
           } else {
             const { readFile } = await import('@tauri-apps/plugin-fs')
-            const budget = createInputResourceBudget()
-            registerInputResourceEntry(budget, anchor, 0)
-            await chargeTauriRegularFile(anchor, budget)
+            try {
+              const budget = createInputResourceBudget()
+              registerInputResourceEntry(budget, anchor, 0)
+              await chargeTauriRegularFile(anchor, budget)
+            } catch (error) {
+              if (!confirmInsistParsing(error)) throw error
+              const budget = createInputResourceBudget(INSIST_ARCHIVE_LIMITS)
+              registerInputResourceEntry(budget, anchor, 0)
+              await chargeTauriRegularFile(anchor, budget)
+            }
             if (!operationGate.isCurrent(generation)) return
 
             const fileName = anchor.split(/[/\\]/).pop() || 'loaded.log'

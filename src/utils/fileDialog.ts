@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { joinNativePath } from './nativePath'
 import { replaceBlobUrl } from './blobUrlMap'
 import { releaseTauriArchiveResource } from './tauriArchiveResources'
-import { ArchiveLimitError } from './archiveLimits'
+import { ArchiveLimitError, confirmInsistParsing, INSIST_ARCHIVE_LIMITS } from './archiveLimits'
 import {
   InputResourceLimitError,
   chargeInputResourceBytes,
@@ -58,20 +58,43 @@ interface OpenFolderResult {
 }
 
 export interface OpenFolderDialogOptions {
-  selectPrimaryLogs?: (options: PrimaryLogSelectionOption[]) => Promise<PrimaryLogSelectionOption[] | null>
+  selectPrimaryLogs?: (
+    options: PrimaryLogSelectionOption[],
+  ) => Promise<PrimaryLogSelectionOption[] | null>
 }
 
 const isTextSearchFileName = (name: string) => {
   const lower = name.toLowerCase()
-  return TEXT_SEARCH_EXTENSIONS.some(ext => lower.endsWith(ext))
+  return TEXT_SEARCH_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 
 const shouldSkipCollectedTextFile = (name: string) => isPrimaryLogFileName(name)
 const toPosixPath = (value: string) => value.replace(/\\/g, '/')
 
-const isInputResourceLimitError = (error: unknown) => (
+const isInputResourceLimitError = (error: unknown) =>
   error instanceof ArchiveLimitError || error instanceof InputResourceLimitError
-)
+
+const withInsistInputBudget = async <T>(
+  load: (budget: InputResourceBudget) => Promise<T>,
+): Promise<T> => {
+  try {
+    return await load(createInputResourceBudget())
+  } catch (error) {
+    if (!confirmInsistParsing(error)) throw error
+    return load(createInputResourceBudget(INSIST_ARCHIVE_LIMITS))
+  }
+}
+
+const withInsistBrowserBudget = async <T>(
+  load: (budget: BrowserInputBudget) => Promise<T>,
+): Promise<T> => {
+  try {
+    return await load(createBrowserInputBudget())
+  } catch (error) {
+    if (!confirmInsistParsing(error)) throw error
+    return load(createBrowserInputBudget(INSIST_ARCHIVE_LIMITS))
+  }
+}
 
 export const chargeTauriRegularFile = async (
   path: string,
@@ -176,9 +199,10 @@ async function openLogFileWithTauri(): Promise<string | null> {
       if (lower.endsWith('.zip') || lower.endsWith('.7z') || lower.endsWith('.rar')) {
         return await openArchiveFileWithTauri(anchor, selectedPaths)
       }
-      const budget = createInputResourceBudget()
-      registerInputResourceEntry(budget, anchor, 0)
-      await chargeTauriRegularFile(anchor, budget)
+      await withInsistInputBudget(async (budget) => {
+        registerInputResourceEntry(budget, anchor, 0)
+        await chargeTauriRegularFile(anchor, budget)
+      })
       const { readFile } = await import('@tauri-apps/plugin-fs')
       const bytes = await readFile(anchor)
       const content = decodeFileContent(bytes)
@@ -191,11 +215,18 @@ async function openLogFileWithTauri(): Promise<string | null> {
 }
 
 async function openArchiveFileWithTauri(path: string, paths: string[]): Promise<string | null> {
-  const result = await invoke<{
+  type ArchiveResult = {
     content: string
     primary_log_files: LoadedPrimaryLogFile[]
     resource_token?: string | null
-  }>('extract_zip_log', { path, paths })
+  }
+  let result: ArchiveResult
+  try {
+    result = await invoke<ArchiveResult>('extract_zip_log', { path, paths, insist: false })
+  } catch (error) {
+    if (!confirmInsistParsing(error)) throw error
+    result = await invoke<ArchiveResult>('extract_zip_log', { path, paths, insist: true })
+  }
   try {
     // Rust extract_zip_log returns empty content; real logs live in primary_log_files
     const primaryLogFiles = result.primary_log_files ?? []
@@ -667,48 +698,59 @@ async function openFolderDialogTauri(options: OpenFolderDialogOptions): Promise<
       return null
     }
 
-    const budget = createInputResourceBudget()
-    registerInputResourceEntry(budget, selected, 0)
-    await assertTauriDirectory(selected)
-    let debugPath = selected
+    return await withInsistInputBudget(async (budget) => {
+      registerInputResourceEntry(budget, selected, 0)
+      await assertTauriDirectory(selected)
+      let debugPath = selected
 
-    if (!(await hasPrimaryLogInTauri(debugPath, budget))) {
-      debugPath = joinNativePath(selected, 'debug')
+      if (!(await hasPrimaryLogInTauri(debugPath, budget))) {
+        debugPath = joinNativePath(selected, 'debug')
 
-      if (!(await exists(debugPath)) || !(await hasPrimaryLogInTauri(debugPath, budget))) {
-        const found = await findDebugFolder(selected, budget)
-        if (!found || !(await hasPrimaryLogInTauri(found, budget))) {
-          toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-          return null
+        if (!(await exists(debugPath)) || !(await hasPrimaryLogInTauri(debugPath, budget))) {
+          const found = await findDebugFolder(selected, budget)
+          if (!found || !(await hasPrimaryLogInTauri(found, budget))) {
+            toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+            return null
+          }
+          debugPath = found
         }
-        debugPath = found
       }
-    }
 
-    const primaryLogFiles = await readPrimaryLogFilesTauri(debugPath, budget, options.selectPrimaryLogs)
+      const primaryLogFiles = await readPrimaryLogFilesTauri(
+        debugPath,
+        budget,
+        options.selectPrimaryLogs,
+      )
 
-    if (primaryLogFiles == null) {
-      return null
-    }
+      if (primaryLogFiles == null) {
+        return null
+      }
 
-    if (primaryLogFiles.length === 0) {
-      toastWarning(`未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-      return null
-    }
+      if (primaryLogFiles.length === 0) {
+        toastWarning(`未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+        return null
+      }
 
+      const errorImages = await readErrorImages(debugPath, budget)
+      const visionImages = await readVisionImages(debugPath, budget)
+      const waitFreezesImages = await readWaitFreezesImages(debugPath, budget)
+      let textFiles: LoadedTextFile[] = []
+      try {
+        textFiles = await collectTextFilesTauri(debugPath, budget)
+      } catch (error) {
+        if (isInputResourceLimitError(error)) throw error
+        console.warn('[文件夹] 收集文本文件失败(Tauri):', error)
+      }
 
-    const errorImages = await readErrorImages(debugPath, budget)
-    const visionImages = await readVisionImages(debugPath, budget)
-    const waitFreezesImages = await readWaitFreezesImages(debugPath, budget)
-    let textFiles: LoadedTextFile[] = []
-    try {
-      textFiles = await collectTextFilesTauri(debugPath, budget)
-    } catch (error) {
-      if (isInputResourceLimitError(error)) throw error
-      console.warn('[文件夹] 收集文本文件失败(Tauri):', error)
-    }
-
-    return { content: '', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles }
+      return {
+        content: '',
+        errorImages,
+        visionImages,
+        waitFreezesImages,
+        textFiles,
+        primaryLogFiles,
+      }
+    })
   } catch (error) {
     console.error('[文件夹] 打开失败:', error)
     toastError('打开文件夹失败: ' + error)
@@ -898,73 +940,82 @@ async function readVisionImagesWeb(
 /**
  * Web 版本：打开文件夹并读取日志
  */
-async function openFolderDialogWeb(options: OpenFolderDialogOptions): Promise<OpenFolderResult | null> {
+async function openFolderDialogWeb(
+  options: OpenFolderDialogOptions,
+): Promise<OpenFolderResult | null> {
   try {
     if (!('showDirectoryPicker' in window)) {
       toastWarning('您的浏览器不支持文件夹选择功能，请使用 Chrome/Edge 等现代浏览器')
       return null
     }
 
-    const dirHandle = await (window as any).showDirectoryPicker() as FileSystemDirectoryHandle
-    const budget = createBrowserInputBudget()
-    const rootLocation: WebDirectoryLocation = {
-      handle: dirHandle,
-      path: dirHandle.name || 'selected-folder',
-      depth: 0,
-    }
-    registerInputResourceEntry(budget, rootLocation.path, rootLocation.depth)
+    const dirHandle = (await (window as any).showDirectoryPicker()) as FileSystemDirectoryHandle
+    return await withInsistBrowserBudget(async (budget) => {
+      const rootLocation: WebDirectoryLocation = {
+        handle: dirHandle,
+        path: dirHandle.name || 'selected-folder',
+        depth: 0,
+      }
+      registerInputResourceEntry(budget, rootLocation.path, rootLocation.depth)
 
-    let debugLocation = rootLocation
+      let debugLocation = rootLocation
 
-    if (!(await hasPrimaryLogInWeb(rootLocation, budget))) {
-      const found = await findDebugFolderWeb(rootLocation, budget)
-      if (!found) {
-        toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+      if (!(await hasPrimaryLogInWeb(rootLocation, budget))) {
+        const found = await findDebugFolderWeb(rootLocation, budget)
+        if (!found) {
+          toastWarning(`未找到debug文件夹或日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+          return null
+        }
+        debugLocation = found
+      }
+
+      const primaryLogFiles = await readPrimaryLogFilesWeb(
+        debugLocation,
+        budget,
+        options.selectPrimaryLogs,
+      )
+
+      if (primaryLogFiles == null) {
         return null
       }
-      debugLocation = found
-    }
 
-    const primaryLogFiles = await readPrimaryLogFilesWeb(
-      debugLocation,
-      budget,
-      options.selectPrimaryLogs,
-    )
+      if (primaryLogFiles.length === 0) {
+        toastWarning(`未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
+        return null
+      }
 
-    if (primaryLogFiles == null) {
-      return null
-    }
+      const errorImageFiles = await readErrorImagesWeb(debugLocation, budget)
+      const visionImageFiles = await readVisionImagesWeb(debugLocation, budget)
+      const waitFreezesImageFiles = await readWaitFreezesImagesWeb(debugLocation, budget)
+      let textFiles: LoadedTextFile[] = []
+      try {
+        textFiles = await collectTextFilesWeb(debugLocation, budget)
+      } catch (error) {
+        if (isInputResourceLimitError(error)) throw error
+        console.warn('[文件夹] 收集文本文件失败(Web):', error)
+      }
 
-    if (primaryLogFiles.length === 0) {
-      toastWarning(`未找到日志文件（${PRIMARY_LOG_FILE_HINT}）`)
-      return null
-    }
-
-
-    const errorImageFiles = await readErrorImagesWeb(debugLocation, budget)
-    const visionImageFiles = await readVisionImagesWeb(debugLocation, budget)
-    const waitFreezesImageFiles = await readWaitFreezesImagesWeb(debugLocation, budget)
-    let textFiles: LoadedTextFile[] = []
-    try {
-      textFiles = await collectTextFilesWeb(debugLocation, budget)
-    } catch (error) {
-      if (isInputResourceLimitError(error)) throw error
-      console.warn('[文件夹] 收集文本文件失败(Web):', error)
-    }
-
-    const createdImageMaps: Array<Map<string, string>> = []
-    try {
-      const errorImages = createWebImageUrlMap(errorImageFiles)
-      createdImageMaps.push(errorImages)
-      const visionImages = createWebImageUrlMap(visionImageFiles)
-      createdImageMaps.push(visionImages)
-      const waitFreezesImages = createWebImageUrlMap(waitFreezesImageFiles)
-      createdImageMaps.push(waitFreezesImages)
-      return { content: '', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles }
-    } catch (error) {
-      revokeWebImageUrlMaps(createdImageMaps)
-      throw error
-    }
+      const createdImageMaps: Array<Map<string, string>> = []
+      try {
+        const errorImages = createWebImageUrlMap(errorImageFiles)
+        createdImageMaps.push(errorImages)
+        const visionImages = createWebImageUrlMap(visionImageFiles)
+        createdImageMaps.push(visionImages)
+        const waitFreezesImages = createWebImageUrlMap(waitFreezesImageFiles)
+        createdImageMaps.push(waitFreezesImages)
+        return {
+          content: '',
+          errorImages,
+          visionImages,
+          waitFreezesImages,
+          textFiles,
+          primaryLogFiles,
+        }
+      } catch (error) {
+        revokeWebImageUrlMaps(createdImageMaps)
+        throw error
+      }
+    })
   } catch (error) {
     console.error('[文件夹] 打开失败:', error)
     if ((error as Error).name === 'AbortError') {

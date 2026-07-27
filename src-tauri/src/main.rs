@@ -18,8 +18,8 @@ use archive_safety::{
     add_archive_entry_count, canonicalize_archive_entry_path, create_private_child_directory,
     create_private_output_file, create_private_temp_directory, inspect_zip_directory,
     validate_archive_entry_path, validate_archive_inputs, validate_authorized_archive_paths,
-    ArchiveLimitKind, ArchivePreflightBudget, ArchiveRuntimeBudget, ArchiveSnapshotWorkspace,
-    ARCHIVE_LIMITS,
+    ArchiveLimitKind, ArchiveLimits, ArchivePreflightBudget, ArchiveRuntimeBudget,
+    ArchiveSnapshotWorkspace, ARCHIVE_LIMITS, INSIST_ARCHIVE_LIMITS,
 };
 
 const PRIMARY_LOG_FILE_HINT: &str = "maa.log / maa.bak*.log / maafw.log / maafw.bak*.log";
@@ -384,9 +384,10 @@ fn extract_zip_log(
     resources: tauri::State<'_, ArchiveExtractionState>,
     path: String,
     paths: Option<Vec<String>>,
+    insist: Option<bool>,
 ) -> Result<ArchiveExtractResult, String> {
     let _operation_guard = resources.try_start_extraction()?;
-    extract_zip_log_inner(&app, &resources, &path, paths)
+    extract_zip_log_inner(&app, &resources, &path, paths, insist.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -402,6 +403,7 @@ fn extract_zip_log_inner(
     resources: &ArchiveExtractionState,
     path: &str,
     paths: Option<Vec<String>>,
+    insist: bool,
 ) -> Result<ArchiveExtractResult, String> {
     let lower = path.to_lowercase();
     if !lower.ends_with(".zip") {
@@ -410,20 +412,24 @@ fn extract_zip_log_inner(
         ));
     }
 
+    let limits = if insist {
+        INSIST_ARCHIVE_LIMITS
+    } else {
+        ARCHIVE_LIMITS
+    };
     let archive_paths = resolve_archive_paths(Path::new(path), paths)?;
     validate_authorized_archive_paths(&archive_paths, |candidate| {
         app.fs_scope().is_allowed(candidate)
     })?;
     let volume_placeholders = vec![0_u64; archive_paths.len()];
-    validate_archive_inputs(&volume_placeholders, ARCHIVE_LIMITS)
-        .map_err(|error| error.to_string())?;
+    validate_archive_inputs(&volume_placeholders, limits).map_err(|error| error.to_string())?;
 
     let snapshot_workspace = ArchiveSnapshotWorkspace::create(path)?;
     let mut snapshots = Vec::with_capacity(archive_paths.len());
     let mut compressed_sizes = Vec::with_capacity(archive_paths.len());
     let mut total_compressed_bytes = 0_u64;
     for (index, archive_path) in archive_paths.into_iter().enumerate() {
-        let remaining = ARCHIVE_LIMITS
+        let remaining = limits
             .max_compressed_bytes
             .saturating_sub(total_compressed_bytes);
         let snapshot = snapshot_workspace.snapshot_source(&archive_path, index, remaining)?;
@@ -433,17 +439,17 @@ fn extract_zip_log_inner(
         compressed_sizes.push(snapshot.size);
         snapshots.push(snapshot);
     }
-    validate_archive_inputs(&compressed_sizes, ARCHIVE_LIMITS)
-        .map_err(|error| error.to_string())?;
+    validate_archive_inputs(&compressed_sizes, limits).map_err(|error| error.to_string())?;
 
     let mut total_directory_entries = 0_u64;
     let mut directory_infos = Vec::with_capacity(snapshots.len());
     for snapshot in &mut snapshots {
-        let info = inspect_zip_directory(&mut snapshot.file, ARCHIVE_LIMITS.max_entries).map_err(
-            |error| format!("无法预检 ZIP [{}]: {error}", snapshot.source_path.display()),
-        )?;
+        let info =
+            inspect_zip_directory(&mut snapshot.file, limits.max_entries).map_err(|error| {
+                format!("无法预检 ZIP [{}]: {error}", snapshot.source_path.display())
+            })?;
         total_directory_entries =
-            add_archive_entry_count(total_directory_entries, info.entries, ARCHIVE_LIMITS)
+            add_archive_entry_count(total_directory_entries, info.entries, limits)
                 .map_err(|error| error.to_string())?;
         directory_infos.push(info);
     }
@@ -470,7 +476,7 @@ fn extract_zip_log_inner(
                 .map_err(|e| format!("读取条目失败 [{}]: {e}", archive_path.display()))?;
             validate_zip_entry(&entry)?;
             preflight_budget
-                .add_directory_entry(entry.name_raw().len() as u64, ARCHIVE_LIMITS)
+                .add_directory_entry(entry.name_raw().len() as u64, limits)
                 .map_err(|error| error.to_string())?;
 
             let name = register_archive_entry_path(&mut seen_entry_paths, entry.name())?;
@@ -517,7 +523,7 @@ fn extract_zip_log_inner(
                     entry.compressed_size,
                     entry.extracted_size,
                     is_image,
-                    ARCHIVE_LIMITS,
+                    limits,
                 )
                 .map_err(|error| error.to_string())?;
             has_selected_images |= is_image;
@@ -552,9 +558,9 @@ fn extract_zip_log_inner(
                     &mut entry,
                     compressed_size,
                     expected_size,
-                    ARCHIVE_LIMITS.max_file_bytes,
+                    limits.max_file_bytes,
                     ArchiveLimitKind::FileSize,
-                    ARCHIVE_LIMITS,
+                    limits,
                 )?;
                 let content = decode_content(&buf);
                 log_segments.push(LoadedPrimaryLogSegment {
@@ -583,6 +589,7 @@ fn extract_zip_log_inner(
                         &mut temp_seq,
                         "png",
                         &mut runtime_budget,
+                        limits,
                     )?;
                     error_images.insert(key, saved_path);
                 }
@@ -598,6 +605,7 @@ fn extract_zip_log_inner(
                         &mut temp_seq,
                         "jpg",
                         &mut runtime_budget,
+                        limits,
                     )?;
                     wait_freezes_images.insert(key, saved_path);
                 } else if let Some(key) = parse_vision_image_key(file_name) {
@@ -610,6 +618,7 @@ fn extract_zip_log_inner(
                         &mut temp_seq,
                         "jpg",
                         &mut runtime_budget,
+                        limits,
                     )?;
                     // 同一 key 覆盖（取最后出现的文件）
                     vision_images.insert(key, saved_path);
@@ -660,6 +669,7 @@ fn save_zip_entry_to_temp_file(
     seq: &mut u64,
     ext: &str,
     runtime_budget: &mut ArchiveRuntimeBudget,
+    limits: ArchiveLimits,
 ) -> Result<String, String> {
     *seq += 1;
     let path = temp_dir.join(format!("{:08}.{ext}", *seq));
@@ -671,9 +681,9 @@ fn save_zip_entry_to_temp_file(
         &mut output,
         compressed_size,
         expected_size,
-        ARCHIVE_LIMITS.max_image_bytes,
+        limits.max_image_bytes,
         ArchiveLimitKind::ImageSize,
-        ARCHIVE_LIMITS,
+        limits,
     )?;
     Ok(path.to_string_lossy().into_owned())
 }
