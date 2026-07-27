@@ -19,12 +19,12 @@ const createDeferred = <T>(): Deferred<T> => {
 
 const createLogFile = (
   content: string,
-  text: () => Promise<string>,
+  arrayBuffer: () => Promise<ArrayBuffer>,
 ): File => ({
   name: 'maa.log',
   size: content.length,
   webkitRelativePath: 'debug/maa.log',
-  text,
+  arrayBuffer,
 } as unknown as File)
 
 const createInputEvent = (file: File): Event => ({
@@ -33,9 +33,10 @@ const createInputEvent = (file: File): Event => ({
 
 describe('Web file input generations', () => {
   it('drops an older folder read that finishes after a newer selection', async () => {
-    const firstText = createDeferred<string>()
-    const firstFile = createLogFile('first', () => firstText.promise)
-    const secondFile = createLogFile('second', async () => 'second')
+    const firstBytes = createDeferred<ArrayBuffer>()
+    const firstFile = createLogFile('first', () => firstBytes.promise)
+    const secondBytes = new TextEncoder().encode('second')
+    const secondFile = createLogFile('second', async () => secondBytes.slice().buffer)
     const onUploadContent = vi.fn()
     const options: UseProcessFileLoaderOptions = {
       isInTauri: ref(false),
@@ -56,14 +57,16 @@ describe('Web file input generations', () => {
     await Promise.resolve()
     const secondRun = handleFolderChange(createInputEvent(secondFile))
     await secondRun
-    firstText.resolve('first')
+    firstBytes.resolve(new TextEncoder().encode('first').buffer)
     await firstRun
 
     expect(onUploadContent).toHaveBeenCalledOnce()
-    expect(onUploadContent.mock.calls[0]?.[5]).toEqual([{
+    expect(onUploadContent.mock.calls[0]?.[5]).toHaveLength(1)
+    expect(onUploadContent.mock.calls[0]?.[5]?.[0]).toMatchObject({
       path: 'debug/maa.log',
       name: 'maa.log',
-      content: 'second',
-    }])
+      file: secondFile,
+    })
+    expect(await onUploadContent.mock.calls[0]?.[5]?.[0]?.loadContent()).toBe('second')
   })
 })

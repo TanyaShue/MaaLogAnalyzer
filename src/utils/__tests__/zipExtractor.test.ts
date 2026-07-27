@@ -7,6 +7,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { extractZipContent, extractZipContents } from '../zipExtractor'
 import type { PrimaryLogSelectionOption } from '../logFileDiscovery'
+import { decodeFileContent } from '../textEncoding'
+import { toExactArrayBuffer } from '../logInputSource'
 
 const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   const copy = new Uint8Array(bytes.byteLength)
@@ -37,16 +39,27 @@ describe('extractZipContent', () => {
 
     expect(result).not.toBeNull()
     expect(result?.content).toBe('')
-    expect(result?.primaryLogFiles).toEqual([{
+    expect(result?.primaryLogFiles).toHaveLength(1)
+    expect(result?.primaryLogFiles[0]).toMatchObject({
       path: 'maa.log',
       name: 'maa.log',
-      content: '[2026-04-16 14:55:00.000][INF][Px1][Tx1][test] AutoCollectStart\n',
-    }])
-    expect(result?.textFiles).toEqual([{
+    })
+    const primary = result!.primaryLogFiles[0]
+    expect('bytes' in primary && decodeFileContent(primary.bytes))
+      .toBe('[2026-04-16 14:55:00.000][INF][Px1][Tx1][test] AutoCollectStart\n')
+    if ('bytes' in primary) {
+      const transferred = toExactArrayBuffer(primary.bytes)
+      structuredClone(transferred, { transfer: [transferred] })
+      expect(primary.bytes.byteLength).toBe(0)
+    }
+    expect(await result?.primaryLogFiles[0]?.loadContent?.())
+      .toBe('[2026-04-16 14:55:00.000][INF][Px1][Tx1][test] AutoCollectStart\n')
+    expect(result?.textFiles).toHaveLength(1)
+    expect(result?.textFiles[0]).toMatchObject({
       path: 'runtime.txt',
       name: 'runtime.txt',
-      content: 'extra searchable text',
-    }])
+    })
+    expect(await result?.textFiles[0]?.loadContent?.()).toBe('extra searchable text')
     expect(result?.errorImages.has('2026.04.16-14.57.56.745_AutoCollectRoute1AssertLocation')).toBe(true)
     expect(result?.visionImages.has('2026.04.16-14.57.57.123_AutoCollectRoute1_123456789')).toBe(true)
     expect(result?.waitFreezesImages.has('2026.04.16-14.57.58.456_AutoCollectRoute1_wait_freezes')).toBe(true)
@@ -93,11 +106,13 @@ describe('extractZipContent', () => {
 
     expect(selectCurrent).toHaveBeenCalledOnce()
     expect(selectCurrent.mock.calls[0]?.[0]).toHaveLength(2)
-    expect(result?.primaryLogFiles).toEqual([{
+    expect(result?.primaryLogFiles).toHaveLength(1)
+    expect(result?.primaryLogFiles[0]).toMatchObject({
       path: 'debug/maa.log',
       name: 'maa.log',
-      content: '[2026-04-16 15:00:00.000][INF] current log\n',
-    }])
+    })
+    expect(await result?.primaryLogFiles[0]?.loadContent?.())
+      .toBe('[2026-04-16 15:00:00.000][INF] current log\n')
   })
 
   it('merges independent MXU ZIP volumes before discovering logs and assets', async () => {
@@ -116,11 +131,12 @@ describe('extractZipContent', () => {
     ])
 
     expect(result?.primaryLogFiles).toHaveLength(1)
-    expect(result?.textFiles).toEqual([{
+    expect(result?.textFiles).toHaveLength(1)
+    expect(result?.textFiles[0]).toMatchObject({
       path: 'runtime.txt',
       name: 'runtime.txt',
-      content: 'text from another volume',
-    }])
+    })
+    expect(await result?.textFiles[0]?.loadContent?.()).toBe('text from another volume')
     expect(result?.errorImages.has('2026.04.16-14.57.56.745_Node')).toBe(true)
   })
 })

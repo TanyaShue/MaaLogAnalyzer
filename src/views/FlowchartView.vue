@@ -23,7 +23,7 @@ import { useFlowchartGraphRuntime } from './flowchart/composables/useFlowchartGr
 import { useFlowchartNodeInteraction } from './flowchart/composables/useFlowchartNodeInteraction'
 import { findNodeInfoImage } from './flowchart/utils/nodeImageLookup'
 import type { LoadedTextFile } from './process/utils/fileLoadingHelpers'
-import type { LoadedPrimaryLogFile } from '../utils/logFileDiscovery'
+import type { PrimaryLogFile } from '../utils/logFileDiscovery'
 
 const props = defineProps<{
   tasks: TaskInfo[]
@@ -34,7 +34,7 @@ const emit = defineEmits<{
   'select-task': [task: TaskInfo]
   'navigate-to-node': [task: TaskInfo, node: NodeInfo]
   'upload-file': [file: File | File[]]
-  'upload-content': [content: string, errorImages?: Map<string, string>, visionImages?: Map<string, string>, waitFreezesImages?: Map<string, string>, textFiles?: LoadedTextFile[], primaryLogFiles?: LoadedPrimaryLogFile[]]
+  'upload-content': [content: string, errorImages?: Map<string, string>, visionImages?: Map<string, string>, waitFreezesImages?: Map<string, string>, textFiles?: LoadedTextFile[], primaryLogFiles?: PrimaryLogFile[]]
 }>()
 
 const { isMobile } = useIsMobile()

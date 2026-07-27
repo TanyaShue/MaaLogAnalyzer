@@ -19,6 +19,7 @@ export interface LogParserWorkerParseRequest {
   type: 'parse'
   requestId: number
   inputs: LogParserWorkerInput[]
+  sortInputsByTimestamp?: boolean
   errorImages?: Map<string, string>
   visionImages?: Map<string, string>
   waitFreezesImages?: Map<string, string>
@@ -56,8 +57,12 @@ export const collectWorkerInputTransfers = (
   inputs: readonly LogParserWorkerInput[],
 ): ArrayBuffer[] => {
   const transfers: ArrayBuffer[] = []
+  const seen = new Set<ArrayBuffer>()
   for (const input of inputs) {
-    if (input.bytes) transfers.push(input.bytes)
+    if (input.bytes && !seen.has(input.bytes)) {
+      seen.add(input.bytes)
+      transfers.push(input.bytes)
+    }
   }
   return transfers
 }

@@ -7,7 +7,7 @@ import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import type { TaskInfo, NodeInfo } from '../types'
 import type { LogParser } from '@windsland52/maa-log-parser'
 import type { LoadedTextFile } from './process/utils/fileLoadingHelpers'
-import type { LoadedPrimaryLogFile, PrimaryLogSelectionOption } from '../utils/logFileDiscovery'
+import type { PrimaryLogFile, PrimaryLogSelectionOption } from '../utils/logFileDiscovery'
 import { useProcessViewController } from './process/composables/useProcessViewController'
 import ProcessMobileToolbar from './process/components/ProcessMobileToolbar.vue'
 import ProcessContentSection from './process/components/ProcessContentSection.vue'
@@ -37,7 +37,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'select-task': [task: TaskInfo]
   'upload-file': [file: File | File[], selectPrimaryLogs?: (options: PrimaryLogSelectionOption[]) => Promise<PrimaryLogSelectionOption[] | null>]
-  'upload-content': [content: string, errorImages?: Map<string, string>, visionImages?: Map<string, string>, waitFreezesImages?: Map<string, string>, textFiles?: LoadedTextFile[], primaryLogFiles?: LoadedPrimaryLogFile[]]
+  'upload-content': [content: string, errorImages?: Map<string, string>, visionImages?: Map<string, string>, waitFreezesImages?: Map<string, string>, textFiles?: LoadedTextFile[], primaryLogFiles?: PrimaryLogFile[]]
   'select-node': [node: NodeInfo]
   'select-action': [node: NodeInfo]
   'select-recognition': [node: NodeInfo, attemptIndex: number]

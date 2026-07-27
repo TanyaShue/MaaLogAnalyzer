@@ -8,16 +8,14 @@ import {
   type BrowserInputBudget,
 } from '../../../utils/browserInputBudget'
 import { isPrimaryLogFileName } from '../../../utils/logFileDiscovery'
+import type { TextFileSource } from '../../../utils/textFileSource'
+import { decodeFileContent } from '../../../utils/textEncoding'
 
 export { isBakLogFileName, isMainLogFileName } from '../../../utils/logFileDiscovery'
 
 const TEXT_SEARCH_EXTENSIONS = ['.log', '.txt', '.jsonl'] as const
 
-export interface LoadedTextFile {
-  path: string
-  name: string
-  content: string
-}
+export type LoadedTextFile = TextFileSource
 
 interface CollectedDebugAssets {
   errorImages: Map<string, string>
@@ -60,7 +58,7 @@ export const collectTextFilesFromFiles = async (
     result.push({
       path,
       name: file.name,
-      content: await file.text(),
+      loadContent: async () => decodeFileContent(new Uint8Array(await file.arrayBuffer())),
     })
   }
   return result

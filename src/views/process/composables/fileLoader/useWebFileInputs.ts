@@ -7,11 +7,11 @@ import {
 } from '../../utils/fileLoadingHelpers'
 import {
   createPrimaryLogSelectionOptions,
-  type LoadedPrimaryLogFile,
+  type FilePrimaryLogFile,
   PRIMARY_LOG_FILE_HINT,
   selectPrimaryLogGroup,
-  sortLoadedPrimaryLogSegments,
 } from '../../../../utils/logFileDiscovery'
+import { decodeFileContent } from '../../../../utils/textEncoding'
 import type { UseProcessFileLoaderOptions } from './types'
 import {
   collectMxuZipVolumes,
@@ -65,7 +65,7 @@ const resolveSelectedLogContent = async (
     return {
       content: '',
       scopedFiles: [] as File[],
-      primaryLogFiles: [] as LoadedPrimaryLogFile[],
+      primaryLogFiles: [] as FilePrimaryLogFile[],
       cancelled: false,
     }
   }
@@ -77,7 +77,7 @@ const resolveSelectedLogContent = async (
     return {
       content: '',
       scopedFiles: [] as File[],
-      primaryLogFiles: [] as LoadedPrimaryLogFile[],
+      primaryLogFiles: [] as FilePrimaryLogFile[],
       cancelled: true,
     }
   }
@@ -85,26 +85,30 @@ const resolveSelectedLogContent = async (
     return {
       content: '',
       scopedFiles: [] as File[],
-      primaryLogFiles: [] as LoadedPrimaryLogFile[],
+      primaryLogFiles: [] as FilePrimaryLogFile[],
       cancelled: false,
     }
   }
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
 
-  const selectedLogItems = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+  const selectedOrder = new Map(selectedOptions.map((option, index) => [option.path, index]))
+  const selectedLogItems = selectedLogs
+    .filter(({ item }) => selectedPaths.has(item.path))
+    .sort((a, b) => (selectedOrder.get(a.item.path) ?? 0) - (selectedOrder.get(b.item.path) ?? 0))
   for (const { item } of selectedLogItems) {
     chargeBrowserInputFile(budget, item.file)
   }
-  const loadedLogs = await Promise.all(selectedLogItems.map(async ({ item }) => ({
+  const primaryLogFiles: FilePrimaryLogFile[] = selectedLogItems.map(({ item }) => ({
     name: item.name,
     path: item.path,
-    content: await item.file.text(),
-  })))
+    file: item.file,
+    loadContent: async () => decodeFileContent(new Uint8Array(await item.file.arrayBuffer())),
+  }))
 
   return {
     content: '',
     scopedFiles: filterFilesBySelectedDir(fileList, selectedLogs[0].candidate.dirPath),
-    primaryLogFiles: sortLoadedPrimaryLogSegments(loadedLogs),
+    primaryLogFiles,
     cancelled: false,
   }
 }

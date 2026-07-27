@@ -13,6 +13,7 @@ import {
   sortLoadedPrimaryLogSegments,
   type PrimaryLogSelectionOption,
   type LoadedPrimaryLogFile,
+  type PrimaryLogFile,
 } from './logFileDiscovery'
 import { decodeFileContent } from './textEncoding'
 import type { ExtractedTextFile } from './archiveShared'
@@ -34,7 +35,7 @@ export interface ArchiveExtractResult {
   visionImages: Map<string, string>
   waitFreezesImages: Map<string, string>
   textFiles: ExtractedTextFile[]
-  primaryLogFiles: LoadedPrimaryLogFile[]
+  primaryLogFiles: PrimaryLogFile[]
 }
 
 export interface ExtractArchiveOptions {

@@ -20,19 +20,20 @@ import {
 import {
   createPrimaryLogSelectionOptions,
   isPrimaryLogFileName,
-  type LoadedPrimaryLogFile,
+  type BytePrimaryLogFile,
+  type PrimaryLogFile,
   type PrimaryLogSelectionOption,
   selectPrimaryLogGroup,
-  sortLoadedPrimaryLogSegments,
 } from './logFileDiscovery'
 import {
   extractErrorImages,
   extractVisionImages,
   extractWaitFreezesImages,
-  extractSearchTextFiles,
+  isSearchTextFile,
   isNeededFile,
 } from './archiveShared'
 import type { ExtractedTextFile } from './archiveShared'
+import { toExactArrayBuffer } from './logInputSource'
 
 export type { ExtractedTextFile } from './archiveShared'
 
@@ -127,6 +128,76 @@ async function unzipNeededFiles(
   })
 }
 
+async function unzipSelectedPaths(
+  zipData: Uint8Array,
+  selectedPaths: ReadonlySet<string>,
+): Promise<Unzipped> {
+  return new Promise<Unzipped>((resolve, reject) => {
+    unzip(
+      zipData,
+      { filter: entry => selectedPaths.has(entry.name) },
+      (err, unzipped) => {
+        if (err) reject(err)
+        else resolve(unzipped)
+      },
+    )
+  })
+}
+
+const createDeferredZipTextLoader = (
+  archiveFiles: readonly File[],
+  targetPaths: readonly string[],
+) => {
+  const selectedPaths = new Set(targetPaths)
+  let loadedContents: Promise<Map<string, string>> | undefined
+
+  const loadAll = async (): Promise<Map<string, string>> => {
+    const contents = new Map<string, string>()
+    for (const archiveFile of archiveFiles) {
+      const archiveBytes = new Uint8Array(await archiveFile.arrayBuffer())
+      const extracted = await unzipSelectedPaths(archiveBytes, selectedPaths)
+      for (const [path, bytes] of Object.entries(extracted)) {
+        contents.set(path.replace(/\\/g, '/').toLowerCase(), decodeFileContent(bytes))
+      }
+    }
+    return contents
+  }
+
+  return async (path: string): Promise<string> => {
+    loadedContents ??= loadAll()
+    const normalizedPath = path.replace(/\\/g, '/').toLowerCase()
+    const content = (await loadedContents).get(normalizedPath)
+    if (content == null) throw new Error(`压缩包中的文本文件已不可用: ${path}`)
+    return content
+  }
+}
+
+const createDeferredSearchTextFiles = (
+  paths: readonly string[],
+  basePath: string,
+  loadContent: (path: string) => Promise<string>,
+): ExtractedTextFile[] => {
+  const basePrefix = basePath ? `${basePath.toLowerCase()}/` : ''
+  return paths
+    .filter((path) => {
+      const normalized = path.replace(/\\/g, '/')
+      const lower = normalized.toLowerCase()
+      if (basePrefix && !lower.startsWith(basePrefix)) return false
+      if (!isSearchTextFile(normalized)) return false
+      const name = normalized.substring(normalized.lastIndexOf('/') + 1)
+      return !isPrimaryLogFileName(name)
+    })
+    .map((path) => {
+      const normalized = path.replace(/\\/g, '/')
+      return {
+        path: normalized,
+        name: normalized.substring(normalized.lastIndexOf('/') + 1),
+        loadContent: async () => await loadContent(path),
+      }
+    })
+    .sort((a, b) => a.path.localeCompare(b.path))
+}
+
 /**
  * Extract logs and debug assets from one or more independent ZIP files.
  * MXU volumes are complete ZIP files, so entries must be merged before log discovery.
@@ -141,7 +212,7 @@ export async function extractZipContents(
   visionImages: Map<string, string>
   waitFreezesImages: Map<string, string>
   textFiles: ExtractedTextFile[]
-  primaryLogFiles: LoadedPrimaryLogFile[]
+  primaryLogFiles: PrimaryLogFile[]
 } | null> {
   const includeAuxiliaryFiles = options.includeAuxiliaryFiles !== false
   const limits = resolveArchiveLimits(options.archiveLimits)
@@ -202,19 +273,24 @@ export async function extractZipContents(
   const paths = Object.keys(files)
 
   const basePath = selectedLogs[0].candidate.dirPath
-  const loadedLogs = selectedLogs
+  const searchablePaths = paths.filter(path => isSearchTextFile(path))
+  const loadDeferredText = createDeferredZipTextLoader(archiveFiles, searchablePaths)
+  const selectedOrder = new Map(selectedOptions.map((option, index) => [option.path, index]))
+  const selectedPrimaryLogs = selectedLogs
     .filter(({ item }) => selectedPaths.has(item.path))
-    .map(({ item }) => {
-      const data = findFile(files, paths, item.path)
-      if (!data) return null
-      return {
+    .sort((a, b) => (selectedOrder.get(a.item.path) ?? 0) - (selectedOrder.get(b.item.path) ?? 0))
+  const primaryLogFiles: BytePrimaryLogFile[] = []
+  for (const { item } of selectedPrimaryLogs) {
+    const data = findFile(files, paths, item.path)
+    if (data) {
+      primaryLogFiles.push({
         path: item.path,
         name: item.name,
-        content: decodeFileContent(data),
-      }
-    })
-    .filter((entry): entry is LoadedPrimaryLogFile => entry != null)
-  const primaryLogFiles = sortLoadedPrimaryLogSegments(loadedLogs)
+        bytes: new Uint8Array(toExactArrayBuffer(data)),
+        loadContent: async () => await loadDeferredText(item.path),
+      })
+    }
+  }
 
   if (primaryLogFiles.length === 0) {
     return null
@@ -224,7 +300,7 @@ export async function extractZipContents(
   const visionImages = includeAuxiliaryFiles ? extractVisionImages(fileMap, paths, basePath) : new Map<string, string>()
   const waitFreezesImages = includeAuxiliaryFiles ? extractWaitFreezesImages(fileMap, paths, basePath) : new Map<string, string>()
   const textFiles = includeAuxiliaryFiles
-    ? extractSearchTextFiles(fileMap, paths, basePath, decodeFileContent)
+    ? createDeferredSearchTextFiles(paths, basePath, loadDeferredText)
     : []
 
   return { content: '', errorImages, visionImages, waitFreezesImages, textFiles, primaryLogFiles }

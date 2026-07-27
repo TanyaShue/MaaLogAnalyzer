@@ -53,6 +53,42 @@ describe('createProcessLogContent', () => {
     expect(parser.parseFile).not.toHaveBeenCalled()
   })
 
+  it('decodes and chronologically sorts raw folder inputs for inline fallback', async () => {
+    const parser = {
+      resetParsedEvents: vi.fn(),
+      setErrorImages: vi.fn(),
+      setVisionImages: vi.fn(),
+      setWaitFreezesImages: vi.fn(),
+      parseInputs: vi.fn(async () => undefined),
+      parseFile: vi.fn(async () => undefined),
+      consumeTasks: vi.fn(() => []),
+    } as unknown as LogParser
+    const processLogContent = createProcessLogContent(createOptions(parser))
+    const encoder = new TextEncoder()
+
+    await processLogContent({
+      content: '',
+      sortParseInputs: true,
+      parseInputs: [
+        {
+          bytes: encoder.encode('[2026-04-16 15:00:00.000][INF] current\n'),
+          sourceKey: 'maa.log',
+          sourcePath: 'maa.log',
+        },
+        {
+          bytes: encoder.encode('[2026-04-16 14:00:00.000][INF] backup\n'),
+          sourceKey: 'maa.bak.log',
+          sourcePath: 'maa.bak.log',
+        },
+      ],
+    })
+
+    expect(parser.parseInputs).toHaveBeenCalledWith([
+      expect.objectContaining({ sourcePath: 'maa.bak.log', inputIndex: 0 }),
+      expect.objectContaining({ sourcePath: 'maa.log', inputIndex: 1 }),
+    ], expect.any(Function))
+  })
+
   it('keeps content-only callers on parseFile', async () => {
     const parser = {
       resetParsedEvents: vi.fn(),

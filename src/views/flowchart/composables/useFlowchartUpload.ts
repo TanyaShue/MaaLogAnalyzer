@@ -10,6 +10,8 @@ import {
 } from '../../process/utils/fileLoadingHelpers'
 import {
   type LoadedPrimaryLogFile,
+  type FilePrimaryLogFile,
+  type PrimaryLogFile,
   PRIMARY_LOG_FILE_HINT,
   selectPrimaryLogGroup,
   sortLoadedPrimaryLogSegments,
@@ -39,7 +41,7 @@ interface UseFlowchartUploadOptions {
     visionImages?: Map<string, string>,
     waitFreezesImages?: Map<string, string>,
     textFiles?: LoadedTextFile[],
-    primaryLogFiles?: LoadedPrimaryLogFile[],
+    primaryLogFiles?: PrimaryLogFile[],
   ) => void
 }
 
@@ -81,7 +83,7 @@ export const useFlowchartUpload = ({
     visionImages: Map<string, string>,
     waitFreezesImages: Map<string, string>,
     textFiles?: LoadedTextFile[],
-    primaryLogFiles?: LoadedPrimaryLogFile[],
+    primaryLogFiles?: PrimaryLogFile[],
     resourceToken?: string | null,
     generation = uploadGeneration,
   ) {
@@ -160,23 +162,24 @@ export const useFlowchartUpload = ({
       return {
         content: '',
         scopedFiles: [] as File[],
-        primaryLogFiles: [] as LoadedPrimaryLogFile[],
+        primaryLogFiles: [] as FilePrimaryLogFile[],
       }
     }
 
     for (const { item } of selectedLogs) {
       chargeBrowserInputFile(budget, item.file)
     }
-    const loadedLogs = await Promise.all(selectedLogs.map(async ({ item }) => ({
+    const primaryLogFiles: FilePrimaryLogFile[] = selectedLogs.map(({ item }) => ({
       name: item.name,
       path: item.path,
-      content: await item.file.text(),
-    })))
+      file: item.file,
+      loadContent: async () => decodeFileContent(new Uint8Array(await item.file.arrayBuffer())),
+    }))
 
     return {
       content: '',
       scopedFiles: filterFilesBySelectedDir(fileList, selectedLogs[0].candidate.dirPath),
-      primaryLogFiles: sortLoadedPrimaryLogSegments(loadedLogs),
+      primaryLogFiles,
     }
   }
 
@@ -219,14 +222,19 @@ export const useFlowchartUpload = ({
           const budget = createInputResourceBudget()
           registerInputResourceEntry(budget, path, 0)
           await chargeTauriRegularFile(path, budget)
-          const content = decodeFileContent(await readFile(path))
+          const fileName = path.split(/[/\\]/).pop() || 'loaded.log'
           await emitUploadContent(
-            content,
+            '',
             new Map(),
             new Map(),
             new Map(),
             undefined,
-            undefined,
+            [{
+              path,
+              name: fileName,
+              loadBytes: async () => await readFile(path),
+              loadContent: async () => decodeFileContent(await readFile(path)),
+            }],
             undefined,
             generation,
           )

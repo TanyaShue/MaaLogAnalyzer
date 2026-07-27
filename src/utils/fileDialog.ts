@@ -6,6 +6,7 @@
 import { isTauri, isVSCode } from './platform'
 import { toastError, toastWarning } from './toast'
 import { decodeFileContent } from './textEncoding'
+import type { TextFileSource } from './textFileSource'
 import { invoke } from '@tauri-apps/api/core'
 import { joinNativePath } from './nativePath'
 import { replaceBlobUrl } from './blobUrlMap'
@@ -25,10 +26,12 @@ import {
   createPrimaryLogSelectionOptions,
   isPrimaryLogFileName,
   type LoadedPrimaryLogFile,
+  type FilePrimaryLogFile,
+  type LoadablePrimaryLogFile,
+  type PrimaryLogFile,
   type PrimaryLogSelectionOption,
   PRIMARY_LOG_FILE_HINT,
   selectPrimaryLogGroup,
-  sortLoadedPrimaryLogSegments,
 } from './logFileDiscovery'
 
 export { isTauri, isVSCode }
@@ -43,11 +46,7 @@ export const normalizeTauriDialogPaths = (
   return selected.filter((path): path is string => typeof path === 'string' && path.length > 0)
 }
 
-export interface LoadedTextFile {
-  path: string
-  name: string
-  content: string
-}
+export type LoadedTextFile = TextFileSource
 
 interface OpenFolderResult {
   content: string
@@ -55,7 +54,7 @@ interface OpenFolderResult {
   visionImages: Map<string, string>
   waitFreezesImages: Map<string, string>
   textFiles: LoadedTextFile[]
-  primaryLogFiles: LoadedPrimaryLogFile[]
+  primaryLogFiles: PrimaryLogFile[]
 }
 
 export interface OpenFolderDialogOptions {
@@ -442,7 +441,7 @@ async function collectTextFilesTauri(
 ): Promise<LoadedTextFile[]> {
   const result: LoadedTextFile[] = []
   const seen = new Set<string>()
-  const { readDir, readTextFile } = await import('@tauri-apps/plugin-fs')
+  const { readDir, readFile } = await import('@tauri-apps/plugin-fs')
 
   const walk = async (dirPath: string, depth: number) => {
     registerInputResourceEntry(budget, dirPath, depth)
@@ -462,8 +461,11 @@ async function collectTextFilesTauri(
       if (seen.has(path)) continue
       seen.add(path)
       await chargeTauriRegularFile(fullPath, budget)
-      const content = await readTextFile(fullPath)
-      result.push({ path, name: entry.name, content })
+      result.push({
+        path,
+        name: entry.name,
+        loadContent: async () => decodeFileContent(await readFile(fullPath)),
+      })
     }
   }
 
@@ -499,8 +501,11 @@ async function collectTextFilesWeb(
       seen.add(path)
       const file = await (entry as FileSystemFileHandle).getFile()
       chargeWebRegularFile(file, nextPath, budget)
-      const content = await file.text()
-      result.push({ path, name: entry.name, content })
+      result.push({
+        path,
+        name: entry.name,
+        loadContent: async () => decodeFileContent(new Uint8Array(await file.arrayBuffer())),
+      })
     }
   }
 
@@ -534,8 +539,8 @@ async function readPrimaryLogFilesTauri(
   dirPath: string,
   budget: InputResourceBudget,
   selectPrimaryLogs?: OpenFolderDialogOptions['selectPrimaryLogs'],
-): Promise<LoadedPrimaryLogFile[] | null> {
-  const { readTextFile } = await import('@tauri-apps/plugin-fs')
+): Promise<LoadablePrimaryLogFile[] | null> {
+  const { readFile } = await import('@tauri-apps/plugin-fs')
   const selectedLogs = selectPrimaryLogGroup(await listPrimaryLogFilesTauri(dirPath, budget))
   if (selectedLogs.length === 0) return []
   const selectedOptions = selectPrimaryLogs
@@ -545,17 +550,19 @@ async function readPrimaryLogFilesTauri(
   if (selectedOptions.length === 0) return []
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
 
-  const selectedLogItems = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+  const selectedOrder = new Map(selectedOptions.map((option, index) => [option.path, index]))
+  const selectedLogItems = selectedLogs
+    .filter(({ item }) => selectedPaths.has(item.path))
+    .sort((a, b) => (selectedOrder.get(a.item.path) ?? 0) - (selectedOrder.get(b.item.path) ?? 0))
   for (const { item } of selectedLogItems) {
     await chargeTauriRegularFile(item.path, budget)
   }
-  const loadedLogs = await Promise.all(selectedLogItems.map(async ({ item }) => ({
+  return selectedLogItems.map(({ item }): LoadablePrimaryLogFile => ({
     path: item.path,
     name: item.name,
-    content: await readTextFile(item.path),
-  })))
-
-  return sortLoadedPrimaryLogSegments(loadedLogs)
+    loadBytes: async () => await readFile(item.path),
+    loadContent: async () => decodeFileContent(await readFile(item.path)),
+  }))
 }
 
 async function listPrimaryLogFilesWeb(
@@ -600,7 +607,7 @@ async function readPrimaryLogFilesWeb(
   location: WebDirectoryLocation,
   budget: BrowserInputBudget,
   selectPrimaryLogs?: OpenFolderDialogOptions['selectPrimaryLogs'],
-): Promise<LoadedPrimaryLogFile[] | null> {
+): Promise<FilePrimaryLogFile[] | null> {
   const selectedLogs = selectPrimaryLogGroup(await listPrimaryLogFilesWeb(location, budget))
   if (selectedLogs.length === 0) return []
   const selectedOptions = selectPrimaryLogs
@@ -610,20 +617,22 @@ async function readPrimaryLogFilesWeb(
   if (selectedOptions.length === 0) return []
   const selectedPaths = new Set(selectedOptions.map(option => option.path))
 
-  const selectedLogItems = selectedLogs.filter(({ item }) => selectedPaths.has(item.path))
+  const selectedOrder = new Map(selectedOptions.map((option, index) => [option.path, index]))
+  const selectedLogItems = selectedLogs
+    .filter(({ item }) => selectedPaths.has(item.path))
+    .sort((a, b) => (selectedOrder.get(a.item.path) ?? 0) - (selectedOrder.get(b.item.path) ?? 0))
   const selectedFiles: Array<{ item: typeof selectedLogItems[number]['item']; file: File }> = []
   for (const { item } of selectedLogItems) {
     const file = await item.handle.getFile()
     chargeWebRegularFile(file, item.resourcePath, budget)
     selectedFiles.push({ item, file })
   }
-  const loadedLogs = await Promise.all(selectedFiles.map(async ({ item, file }) => ({
+  return selectedFiles.map(({ item, file }): FilePrimaryLogFile => ({
     path: item.path,
     name: item.name,
-    content: await file.text(),
-  })))
-
-  return sortLoadedPrimaryLogSegments(loadedLogs)
+    file,
+    loadContent: async () => decodeFileContent(new Uint8Array(await file.arrayBuffer())),
+  }))
 }
 
 /**

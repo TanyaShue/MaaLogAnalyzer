@@ -8,6 +8,11 @@ import {
   parseLogsInWorker,
 } from '../../../../utils/parserWorkerClient'
 import { reviveParsedTaskList } from '../../../../utils/parsedTaskRevival'
+import {
+  materializeInlineParseInput,
+  materializeWorkerParseInput,
+} from '../../../../utils/logInputSource'
+import { sortPrimaryLogParseInputs } from '../../../../utils/logFileDiscovery'
 
 export const createProcessLogContent = (
   options: LogLoadingPipelineOptions,
@@ -46,13 +51,15 @@ export const createProcessLogContent = (
         }
       }
 
-      const inputs = params.parseInputs && params.parseInputs.length > 0
-        ? params.parseInputs
-        : [{ content: params.content }]
-
       const parseInline = async (): Promise<TaskInfo[]> => {
         if (params.parseInputs && params.parseInputs.length > 0) {
-          await parser.parseInputs(params.parseInputs, onProgress)
+          const decodedInputs = await Promise.all(
+            params.parseInputs.map(materializeInlineParseInput),
+          )
+          const parseInputs = params.sortParseInputs
+            ? sortPrimaryLogParseInputs(decodedInputs)
+            : decodedInputs
+          await parser.parseInputs(parseInputs, onProgress)
         } else {
           await parser.parseFile(params.content, onProgress)
         }
@@ -67,8 +74,12 @@ export const createProcessLogContent = (
         parsedTasks = await parseInline()
       } else {
         try {
+          const inputs = params.parseInputs && params.parseInputs.length > 0
+            ? await Promise.all(params.parseInputs.map(materializeWorkerParseInput))
+            : [{ content: params.content }]
           parsedTasks = reviveParsedTaskList(await parseLogsInWorker({
             inputs,
+            sortInputsByTimestamp: params.sortParseInputs,
             errorImages: params.errorImages,
             visionImages: params.visionImages,
             waitFreezesImages: params.waitFreezesImages,

@@ -100,19 +100,22 @@ export const useTauriBridge = (
             const budget = createInputResourceBudget()
             registerInputResourceEntry(budget, anchor, 0)
             await chargeTauriRegularFile(anchor, budget)
-            const content = decodeFileContent(await readFile(anchor))
             if (!operationGate.isCurrent(generation)) return
 
-            if (content) {
-              const fileName = anchor.split(/[/\\]/).pop() || 'loaded.log'
-              options.onUploadContent(
-                content,
-                undefined,
-                undefined,
-                undefined,
-                [{ path: anchor, name: fileName, content }],
-              )
-            }
+            const fileName = anchor.split(/[/\\]/).pop() || 'loaded.log'
+            options.onUploadContent(
+              '',
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              [{
+                path: anchor,
+                name: fileName,
+                loadBytes: async () => await readFile(anchor),
+                loadContent: async () => decodeFileContent(await readFile(anchor)),
+              }],
+            )
           }
         } finally {
           operationGate.finish(generation)

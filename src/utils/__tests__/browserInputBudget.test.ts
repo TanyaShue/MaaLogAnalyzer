@@ -62,11 +62,12 @@ describe('browser input resource budgets', () => {
 
     const files = await collectTextFilesFromFiles([primary, auxiliary], budget)
 
-    expect(files).toEqual([{
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({
       path: 'details.txt',
       name: 'details.txt',
-      content: 'auxiliary',
-    }])
+    })
+    expect(await files[0].loadContent?.()).toBe('auxiliary')
     expect(budget.selectedBytes).toBe(auxiliary.size)
   })
 })

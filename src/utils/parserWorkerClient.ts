@@ -13,6 +13,7 @@ export class LogParserWorkerUnavailableError extends Error {
 
 export interface ParseInWorkerParams {
   inputs: LogParserWorkerInput[]
+  sortInputsByTimestamp?: boolean
   errorImages?: Map<string, string>
   visionImages?: Map<string, string>
   waitFreezesImages?: Map<string, string>
@@ -32,6 +33,7 @@ export const isLogParserWorkerSupported = (): boolean => (
  */
 export const parseLogsInWorker = ({
   inputs,
+  sortInputsByTimestamp,
   errorImages,
   visionImages,
   waitFreezesImages,
@@ -88,6 +90,7 @@ export const parseLogsInWorker = ({
         type: 'parse' as const,
         requestId: 1,
         inputs,
+        sortInputsByTimestamp,
         errorImages,
         visionImages,
         waitFreezesImages,

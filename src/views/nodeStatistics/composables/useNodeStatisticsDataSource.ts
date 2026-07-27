@@ -4,8 +4,12 @@ import type { TaskInfo } from '../../../types'
 import { LogParser } from '@windsland52/maa-log-parser'
 import { getErrorMessage } from '../../../utils/errorHandler'
 import { isTauri } from '../../../utils/platform'
-import { combineLoadedPrimaryLogSegments } from '../../../utils/logFileDiscovery'
+import {
+  combineLoadedPrimaryLogSegments,
+  createPrimaryLogParseInputs,
+} from '../../../utils/logFileDiscovery'
 import { extractZipContent } from '../../../utils/zipExtractor'
+import { materializeInlineParseInput } from '../../../utils/logInputSource'
 
 const readUploadedLogContent = async (file: File): Promise<string> => {
   if (!file.name.toLowerCase().endsWith('.zip')) {
@@ -18,7 +22,18 @@ const readUploadedLogContent = async (file: File): Promise<string> => {
   if (!extracted) {
     throw new Error('ZIP 中未找到有效的 MAA 日志文件')
   }
-  return combineLoadedPrimaryLogSegments(extracted.primaryLogFiles)
+  const loadedLogs = await Promise.all(
+    createPrimaryLogParseInputs(extracted.primaryLogFiles).map(async (input, index) => {
+      const loaded = await materializeInlineParseInput(input)
+      const sourcePath = loaded.sourcePath ?? loaded.sourceKey ?? `primary-log:${index}`
+      return {
+        path: sourcePath,
+        name: sourcePath.replace(/\\/g, '/').split('/').pop() ?? sourcePath,
+        content: loaded.content,
+      }
+    }),
+  )
+  return combineLoadedPrimaryLogSegments(loadedLogs)
 }
 
 interface NodeStatisticsMessageApi {

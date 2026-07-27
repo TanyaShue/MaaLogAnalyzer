@@ -1,11 +1,8 @@
 import { isPrimaryLogFileName } from './logFileDiscovery'
 import { replaceBlobUrl } from './blobUrlMap'
+import type { TextFileSource } from './textFileSource'
 
-export interface ExtractedTextFile {
-  path: string
-  name: string
-  content: string
-}
+export type ExtractedTextFile = TextFileSource
 
 const SEARCH_TEXT_EXTENSIONS = ['.log', '.txt', '.jsonl'] as const
 

@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { LoadedTextFile } from '../../utils/fileLoadingHelpers'
-import type { LoadedPrimaryLogFile, PrimaryLogSelectionOption } from '../../../../utils/logFileDiscovery'
+import type { PrimaryLogFile, PrimaryLogSelectionOption } from '../../../../utils/logFileDiscovery'
 
 export interface UseProcessFileLoaderOptions {
   isInTauri: Ref<boolean>
@@ -15,7 +15,7 @@ export interface UseProcessFileLoaderOptions {
     visionImages?: Map<string, string>,
     waitFreezesImages?: Map<string, string>,
     textFiles?: LoadedTextFile[],
-    primaryLogFiles?: LoadedPrimaryLogFile[],
+    primaryLogFiles?: PrimaryLogFile[],
   ) => void
   onFileLoadingStart: () => void
   onFileLoadingEnd: () => void

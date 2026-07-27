@@ -1,4 +1,5 @@
 import type { ParseSourceInput } from '@windsland52/maa-log-parser'
+import type { LogParseSourceInput } from './logInputSource'
 
 export const PRIMARY_LOG_FILE_HINT = 'maa.log / maa.bak*.log / maafw.log / maafw.bak*.log'
 
@@ -23,7 +24,29 @@ export interface PrimaryLogSourceEntry {
 
 export interface LoadedPrimaryLogFile extends PrimaryLogSourceEntry {
   content: string
+  loadContent?: never
 }
+
+export interface BytePrimaryLogFile extends PrimaryLogSourceEntry {
+  bytes: Uint8Array
+  loadContent: () => Promise<string>
+}
+
+export interface FilePrimaryLogFile extends PrimaryLogSourceEntry {
+  file: File
+  loadContent: () => Promise<string>
+}
+
+export interface LoadablePrimaryLogFile extends PrimaryLogSourceEntry {
+  loadBytes: () => Promise<Uint8Array>
+  loadContent: () => Promise<string>
+}
+
+export type PrimaryLogFile =
+  | LoadedPrimaryLogFile
+  | BytePrimaryLogFile
+  | FilePrimaryLogFile
+  | LoadablePrimaryLogFile
 
 export interface PrimaryLogSelectionOption extends PrimaryLogSourceEntry {
   kind: PrimaryLogKind
@@ -217,6 +240,24 @@ export const sortLoadedPrimaryLogSegments = <T extends PrimaryLogSourceEntry & {
     .map(({ item }) => item)
 }
 
+export const sortPrimaryLogParseInputs = (
+  inputs: readonly ParseSourceInput[],
+): ParseSourceInput[] => {
+  const sortable = inputs.map((input, index) => ({
+    input,
+    path: input.sourcePath ?? input.sourceKey ?? `primary-log:${index}`,
+    name: (input.sourcePath ?? input.sourceKey ?? `primary-log:${index}`)
+      .replace(/\\/g, '/')
+      .split('/')
+      .pop() ?? `primary-log:${index}`,
+    content: input.content,
+  }))
+  return sortLoadedPrimaryLogSegments(sortable).map(({ input }, index) => ({
+    ...input,
+    inputIndex: index,
+  }))
+}
+
 export const combineLoadedPrimaryLogSegments = <
   T extends PrimaryLogSourceEntry & { content: string },
 >(
@@ -233,13 +274,32 @@ export const combineLoadedPrimaryLogSegments = <
   return combined
 }
 
-export const createPrimaryLogParseInputs = <T extends LoadedPrimaryLogFile>(
+export const createPrimaryLogParseInputs = <T extends PrimaryLogFile>(
   entries: Iterable<T>,
-): ParseSourceInput[] => {
-  return sortLoadedPrimaryLogSegments(entries).map((entry, index) => ({
-    content: entry.content,
-    sourceKey: entry.path || entry.name || `primary-log:${index}`,
-    sourcePath: entry.path,
-    inputIndex: index,
-  }))
+): LogParseSourceInput[] => {
+  const sourceEntries = Array.from(entries)
+  const orderedEntries = sourceEntries.every(
+    (entry): entry is T & LoadedPrimaryLogFile => 'content' in entry,
+  )
+    ? sortLoadedPrimaryLogSegments(sourceEntries)
+    : sourceEntries
+
+  return orderedEntries.map((entry, index) => {
+    const metadata = {
+      sourceKey: entry.path || entry.name || `primary-log:${index}`,
+      sourcePath: entry.path,
+      inputIndex: index,
+    }
+    if ('content' in entry) return { ...metadata, content: entry.content }
+    if ('bytes' in entry) return { ...metadata, bytes: entry.bytes }
+    if ('file' in entry) return { ...metadata, file: entry.file }
+    return { ...metadata, loadBytes: entry.loadBytes }
+  })
+}
+
+export const getPrimaryLogContentLoader = (
+  entry: PrimaryLogFile,
+): (() => Promise<string>) => {
+  if ('loadContent' in entry && entry.loadContent) return entry.loadContent
+  return async () => entry.content
 }

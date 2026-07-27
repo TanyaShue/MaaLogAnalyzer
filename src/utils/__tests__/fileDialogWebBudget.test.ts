@@ -6,7 +6,8 @@ type MockEntry = FileSystemFileHandle | FileSystemDirectoryHandle
 
 const mockFile = (name: string, content: string, size?: number): File => {
   if (size == null) return new File([content], name)
-  return { name, size, text: async () => content } as File
+  const bytes = new TextEncoder().encode(content)
+  return { name, size, arrayBuffer: async () => bytes.slice().buffer } as File
 }
 
 const fileHandle = (file: File): FileSystemFileHandle => ({
@@ -51,16 +52,16 @@ describe('Web file picker resource budgets', () => {
   })
 
   it('rejects an oversized primary log before reading its text', async () => {
-    const text = vi.fn(async () => 'oversized')
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0))
     const file = {
       name: 'maa.log',
       size: resolveArchiveLimits().maxFileBytes + 1,
-      text,
+      arrayBuffer,
     } as unknown as File
     stubPicker(directoryHandle('debug', [fileHandle(file)]))
 
     await expect(openFolderDialog()).resolves.toBeNull()
-    expect(text).not.toHaveBeenCalled()
+    expect(arrayBuffer).not.toHaveBeenCalled()
   })
 
   it('loads a directly nested debug folder within the shared budget', async () => {
@@ -70,10 +71,14 @@ describe('Web file picker resource budgets', () => {
     ])
     stubPicker(directoryHandle('selected', [debug]))
 
-    await expect(openFolderDialog()).resolves.toMatchObject({
-      primaryLogFiles: [{ name: 'maa.log', content: 'primary' }],
-      textFiles: [{ path: 'details.txt', name: 'details.txt', content: 'auxiliary' }],
-    })
+    const result = await openFolderDialog()
+
+    expect(result?.primaryLogFiles).toHaveLength(1)
+    expect(result?.primaryLogFiles[0]).toMatchObject({ name: 'maa.log' })
+    expect(await result?.primaryLogFiles[0]?.loadContent?.()).toBe('primary')
+    expect(result?.textFiles).toHaveLength(1)
+    expect(result?.textFiles[0]).toMatchObject({ path: 'details.txt', name: 'details.txt' })
+    expect(await result?.textFiles[0]?.loadContent?.()).toBe('auxiliary')
   })
 
   it('stops recursive discovery at the shared directory depth limit', async () => {
