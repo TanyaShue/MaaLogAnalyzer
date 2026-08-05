@@ -21,7 +21,8 @@ export const createProcessLogContent = (
 
   return async (params: ProcessLogContentParams) => {
     const requestId = ++latestRequestId
-    const parser = options.createParser?.() ?? new LogParser()
+    const incremental = !!params.incrementalFileHandle
+    const parser = incremental ? options.parser : (options.createParser?.() ?? new LogParser())
 
     options.stopRealtimeSession()
     options.parser.resetParsedEvents()
@@ -63,14 +64,14 @@ export const createProcessLogContent = (
         } else {
           await parser.parseFile(params.content, onProgress)
         }
-        return parser.consumeTasks()
+        return incremental ? parser.getTasksSnapshot() : parser.consumeTasks()
       }
 
       // 解析是内存峰值最高的一步。放进 Worker 后即使耗尽内存，被浏览器终止的也
       // 只是该 Worker，主线程仍能提示用户；退回主线程解析仅用于不支持 Worker 的
       // 环境（以及注入了 createParser 的测试）。
       let parsedTasks: TaskInfo[]
-      if (options.createParser || !isLogParserWorkerSupported()) {
+      if (incremental || options.createParser || !isLogParserWorkerSupported()) {
         parsedTasks = await parseInline()
       } else {
         try {

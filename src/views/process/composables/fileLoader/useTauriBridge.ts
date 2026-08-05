@@ -1,7 +1,6 @@
 import type { UseProcessFileLoaderOptions } from './types'
 import { toastError } from '../../../../utils/toast'
 import { invoke } from '@tauri-apps/api/core'
-import { decodeFileContent } from '../../../../utils/textEncoding'
 import { chargeTauriRegularFile, normalizeTauriDialogPaths } from '../../../../utils/fileDialog'
 import {
   createPrimaryLogSelectionOptions,
@@ -18,6 +17,7 @@ import {
 } from '../../../../utils/browserInputBudget'
 import type { FileLoadOperationGate } from './operationGate'
 import { confirmInsistParsing, INSIST_ARCHIVE_LIMITS } from '../../../../utils/archiveLimits'
+import { rememberFileReader } from '../../../../utils/webFileHandles'
 
 interface TauriArchiveLoadResult {
   content: string
@@ -127,19 +127,13 @@ export const useTauriBridge = (
             if (!operationGate.isCurrent(generation)) return
 
             const fileName = anchor.split(/[/\\]/).pop() || 'loaded.log'
-            options.onUploadContent(
-              '',
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              [{
-                path: anchor,
-                name: fileName,
-                loadBytes: async () => await readFile(anchor),
-                loadContent: async () => decodeFileContent(await readFile(anchor)),
-              }],
-            )
+            const initialBytes = await readFile(anchor)
+            const initialFile = new File([initialBytes], fileName, { type: 'text/plain' })
+            const monitoredFile = rememberFileReader(initialFile, async () => {
+              const bytes = await readFile(anchor)
+              return new File([bytes], fileName, { type: 'text/plain' })
+            })
+            options.onUploadFile(monitoredFile)
           }
         } finally {
           operationGate.finish(generation)

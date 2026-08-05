@@ -48,6 +48,10 @@ export const useProcessLayout = (options: {
   displayMode: Ref<string>
 }) => {
   const processLayoutState = readProcessLayoutState()
+  // A saved splitter position is user state.  Derived defaults must not
+  // overwrite it during startup when detail/display watchers settle.
+  let hasPersistedTaskListSize = typeof processLayoutState.taskListSize === 'number'
+  let hasPersistedNodeNavSize = typeof processLayoutState.nodeNavSize === 'number'
 
   const taskListCollapsed = ref(isPersistedLayoutCollapsed(processLayoutState.taskListCollapsed))
   const taskListSize = ref(
@@ -88,6 +92,7 @@ export const useProcessLayout = (options: {
   }
 
   watch(options.detailViewCollapsed, (detailCollapsed) => {
+    if (hasPersistedTaskListSize) return
     if (!taskListCollapsed.value) {
       if (detailCollapsed) {
         taskListSize.value = 0.15
@@ -100,6 +105,7 @@ export const useProcessLayout = (options: {
   })
 
   watch([taskListCollapsed, options.detailViewCollapsed, options.displayMode], ([taskCollapsed, detailCollapsed, displayMode]) => {
+    if (hasPersistedNodeNavSize) return
     if (!nodeNavCollapsed.value) {
       const size = getNodeNavDefaultSize(!!taskCollapsed, !!detailCollapsed, displayMode)
       nodeNavSize.value = size
@@ -119,6 +125,8 @@ export const useProcessLayout = (options: {
   })
 
   watch(layoutResetGeneration, () => {
+    hasPersistedTaskListSize = false
+    hasPersistedNodeNavSize = false
     const navSize = getNodeNavDefaultSize(false, false, options.displayMode.value)
     taskListCollapsed.value = false
     taskListSize.value = 0.25

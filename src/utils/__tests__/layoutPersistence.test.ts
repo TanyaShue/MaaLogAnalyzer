@@ -52,4 +52,25 @@ describe('persisted layout reset', () => {
     expect(values.get(PROCESS_LAYOUT_STORAGE_KEY)).toContain('"taskListCollapsed":false')
     expect(values.get(TEXT_SEARCH_LAYOUT_STORAGE_KEY)).toContain('"splitSize":0.4')
   })
+
+  it('keeps saved process splitter sizes during reactive initialization', async () => {
+    values.set(PROCESS_LAYOUT_STORAGE_KEY, JSON.stringify({
+      taskListCollapsed: false,
+      taskListSize: 0.31,
+      taskListSavedSize: 0.31,
+      nodeNavCollapsed: false,
+      nodeNavSize: 0.27,
+      nodeNavSavedSize: 0.27,
+    }))
+    const detailCollapsed = ref(false)
+    const displayMode = ref('tree')
+    const process = useProcessLayout({ detailViewCollapsed: detailCollapsed, displayMode })
+
+    detailCollapsed.value = true
+    displayMode.value = 'detailed'
+    await nextTick()
+
+    expect(process.taskListSize.value).toBe(0.31)
+    expect(process.nodeNavSize.value).toBe(0.27)
+  })
 })

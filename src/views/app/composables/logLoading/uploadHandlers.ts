@@ -11,6 +11,8 @@ import type { ProcessLogContentParams } from './types'
 import type { DeferredTextSearchTarget, TextSearchLoadedTarget } from '../useTextSearchTargets'
 import { getTextFileContentLoader } from '../../../../utils/textFileSource'
 import { decodeFileContent } from '../../../../utils/textEncoding'
+import { getRememberedFileReader, getWebFileHandle } from '../../../../utils/webFileHandles'
+
 import {
   confirmInsistParsing,
   INSIST_ARCHIVE_LIMIT_OVERRIDES,
@@ -63,6 +65,51 @@ const pickPreferredDeferredTargetId = (
 
 export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOptions) => {
   const { pipeline, processLogContent } = options
+  let incrementalTimer: number | null = null
+  let incrementalGeneration = 0
+
+  const stopIncrementalMonitor = () => {
+    incrementalGeneration += 1
+    if (incrementalTimer != null) window.clearTimeout(incrementalTimer)
+    incrementalTimer = null
+  }
+
+  const startIncrementalMonitor = (readCurrentFile: () => Promise<File>, initialOffset = 0) => {
+    stopIncrementalMonitor()
+    const generation = incrementalGeneration
+    let offset = initialOffset
+    let carry = ''
+    const poll = async () => {
+      if (generation !== incrementalGeneration) return
+      try {
+        const file = await readCurrentFile()
+        if (file.size < offset) {
+          // Truncate/rotation: restart through the normal full-file path.
+          offset = 0
+          carry = ''
+          await processLogContent({ content: '', incrementalFileHandle: true })
+        }
+        if (file.size > offset) {
+          const bytes = new Uint8Array(await file.slice(offset).arrayBuffer())
+          offset = file.size
+          const text = carry + decodeFileContent(bytes)
+          const lines = text.split(/\r?\n/)
+          carry = lines.pop() ?? ''
+          if (lines.length > 0) {
+            pipeline.parser.appendRealtimeLines(lines)
+            pipeline.applyParsedTasks(pipeline.parser.getTasksSnapshot(), true)
+          }
+        }
+      } catch (error) {
+        console.warn('[web-file-monitor] incremental read failed:', error)
+      } finally {
+        if (generation === incrementalGeneration) {
+          incrementalTimer = window.setTimeout(() => void poll(), 1000)
+        }
+      }
+    }
+    void poll()
+  }
 
   const handleFileUpload = async (
     upload: File | File[],
@@ -71,6 +118,8 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
     const files = Array.isArray(upload) ? upload : [upload]
     const file = files[0]
     if (!file) return
+
+    stopIncrementalMonitor()
 
     if (pipeline.loading.value) {
       pipeline.onWarning('正在处理上一个文件，请稍候')
@@ -121,6 +170,46 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
       }
 
       const fileName = file.name || 'loaded.log'
+      const handle = getWebFileHandle(file)
+      const rememberedReader = getRememberedFileReader(file)
+      const readCurrentFile = handle
+        ? () => handle.getFile()
+        : rememberedReader
+      if (readCurrentFile) {
+        let initial: File
+        try {
+          initial = await readCurrentFile()
+        } catch {
+          initial = file
+        }
+        if (initial === file) {
+          await processLogContent({
+            content: '',
+            parseInputs: [{ file, sourceKey: fileName, sourcePath: fileName, inputIndex: 0 }],
+            loadedDefaultTargetId: 'loaded:single',
+            deferredTargets: [{
+              id: 'loaded:single', label: file.name, fileName: file.name,
+              loadContent: async () => decodeFileContent(new Uint8Array(await file.arrayBuffer())),
+            }],
+          })
+          return
+        }
+        await processLogContent({
+          content: '',
+          parseInputs: [{ file: initial, sourceKey: fileName, sourcePath: fileName, inputIndex: 0 }],
+          incrementalFileHandle: true,
+          loadedDefaultTargetId: 'loaded:single',
+          deferredTargets: [{
+            id: 'loaded:single', label: file.name, fileName: file.name,
+            loadContent: async () => {
+              const latest = await readCurrentFile()
+              return decodeFileContent(new Uint8Array(await latest.arrayBuffer()))
+            },
+          }],
+        })
+        startIncrementalMonitor(readCurrentFile, initial.size)
+        return
+      }
       await processLogContent({
         content: '',
         parseInputs: [{
@@ -152,6 +241,7 @@ export const createLogLoadingUploadHandlers = (options: CreateUploadHandlersOpti
     textFiles?: LoadedTextFile[],
     primaryLogFiles?: PrimaryLogFile[],
   ) => {
+    stopIncrementalMonitor()
     if (pipeline.loading.value) {
       pipeline.onWarning('正在处理上一个文件，请稍候')
       return

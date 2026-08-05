@@ -42,6 +42,7 @@ export interface ProcessLogContentParams {
   loadedTargets?: TextSearchLoadedTarget[]
   loadedDefaultTargetId?: string
   deferredTargets?: DeferredTextSearchTarget[]
+  incrementalFileHandle?: boolean
 }
 
 export interface HandleContentUploadParams {

@@ -26,6 +26,7 @@ import {
 import { revokeBlobUrlMap } from '../../../../utils/blobUrlMap'
 import type { FileLoadOperationGate } from './operationGate'
 import { confirmInsistParsing, INSIST_ARCHIVE_LIMITS } from '../../../../utils/archiveLimits'
+import { rememberWebFileHandle } from '../../../../utils/webFileHandles'
 
 const getFileRelativePath = (file: File): string => {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
@@ -44,6 +45,7 @@ const getMxuZipUpload = (files: File[], anchor: File): File | File[] => {
   const volumes = collectMxuZipVolumes(files, anchor)
   return volumes.length > 1 ? volumes : anchor
 }
+
 
 const withInsistBrowserBudget = async <T>(
   load: (budget: BrowserInputBudget) => Promise<T>,
@@ -210,6 +212,25 @@ export const useWebFileInputs = (
     const file = files[0]
     if (file) {
       operationGate.begin()
+      // Chromium exposes a handle for dragged files as well. Preserve it when
+      // available; otherwise retain the existing File-based drop behavior.
+      const handleGetter = (firstItem as DataTransferItem & {
+        getAsFileSystemHandle?: () => Promise<FileSystemFileHandle | FileSystemDirectoryHandle>
+      }).getAsFileSystemHandle
+      if (files.length === 1 && handleGetter) {
+        try {
+          const handle = await handleGetter.call(firstItem)
+          if (handle?.kind === 'file') {
+            options.onUploadFile(
+              rememberWebFileHandle(file, handle as FileSystemFileHandle),
+              options.selectPrimaryLogs,
+            )
+            return
+          }
+        } catch {
+          // Fall through to the original File upload path.
+        }
+      }
       options.onUploadFile(getMxuZipUpload(files, file), options.selectPrimaryLogs)
     }
   }
@@ -281,6 +302,26 @@ export const useWebFileInputs = (
 
   const triggerFileSelect = () => {
     operationGate.begin()
+    // File System Access gives us a revocable handle that can be re-read later.
+    // Fall back to the existing input flow when unavailable or denied.
+    if (!options.isInTauri.value && !options.isInVSCode.value && 'showOpenFilePicker' in window) {
+      void (async () => {
+        try {
+          const [handle] = await (window as Window & {
+            showOpenFilePicker?: (options?: unknown) => Promise<FileSystemFileHandle[]>
+          }).showOpenFilePicker?.({
+            multiple: false,
+            types: [{ description: 'Log files', accept: { 'text/plain': ['.log', '.txt', '.jsonl'] } }],
+          }) ?? []
+          if (!handle) return
+          const file = await handle.getFile()
+          options.onUploadFile(rememberWebFileHandle(file, handle), options.selectPrimaryLogs)
+        } catch (error) {
+          if ((error as Error)?.name !== 'AbortError') fileInputRef.value?.click()
+        }
+      })()
+      return
+    }
     fileInputRef.value?.click()
   }
 
